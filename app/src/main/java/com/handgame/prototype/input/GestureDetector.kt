@@ -7,12 +7,13 @@ enum class Gesture { OPEN, PINCH, FIST }
 
 /** Tunable gesture thresholds. All distances are in units of the hand's own palm length. */
 data class GestureThresholds(
-    // Tuned on a guided recording (Galaxy S24, front camera): pinches read 0.19–0.32 (p10–p90)
-    // and open hands ≥ 0.88; fists curl 0.80–0.97 while every other pose stays ≥ 1.80.
+    // Tuned on guided recordings (Galaxy S24, front camera): pinches read 0.19–0.32 in one
+    // session and 0.32–0.39 in another (p10–p90), while open hands stay ≥ 0.88; fists curl
+    // 0.80–0.97 while every other pose stays ≥ 1.80.
     /** Thumb-tip to index-tip distance that starts a pinch. */
-    val pinchEnter: Float = 0.38f,
+    val pinchEnter: Float = 0.45f,
     /** Distance that ends a pinch (larger than [pinchEnter] = hysteresis). */
-    val pinchExit: Float = 0.55f,
+    val pinchExit: Float = 0.62f,
     /** A finger counts as curled when tip→wrist / knuckle→wrist is below this. Fist needs all four. */
     val fistEnter: Float = 1.45f,
     val fistExit: Float = 1.65f,

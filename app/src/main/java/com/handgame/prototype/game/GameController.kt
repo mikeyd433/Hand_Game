@@ -12,6 +12,7 @@ import com.handgame.prototype.tracking.HandMeasure
 import com.handgame.prototype.tracking.Handedness
 import com.handgame.prototype.tracking.HandednessVoter
 import com.handgame.prototype.tracking.Lm
+import com.handgame.prototype.tracking.SampleInterpolator
 import com.handgame.prototype.tracking.TrackingSample
 import kotlin.math.abs
 
@@ -151,6 +152,7 @@ class GameController(
         rig.applySettings(s)
         HandLook.scale = s.handScale
         if (cameraChanged) {
+            interpolator.reset()
             // A different camera means a different hand pose and distance: recalibrate.
             handednessVoter.reset()
             recalibrate()
@@ -174,7 +176,19 @@ class GameController(
     // Frame update
     // ------------------------------------------------------------------------------------------
 
-    fun update(dtRaw: Float, sample: TrackingSample?) {
+    /** Evens out tracking timing when the caller provides a real clock (see [update]). */
+    private val interpolator = SampleInterpolator()
+    private var interpolating = false
+
+    /**
+     * Runs one frame.
+     * @param nowNs current time on the same clock as [TrackingSample.timestampNs] (capture time,
+     *   System.nanoTime). When given, the hand is drawn from capture-time interpolation, evenly
+     *   paced regardless of when results arrive; gestures still use each new result immediately.
+     *   Without it (tests), each result drives the hand as it arrives.
+     */
+    fun update(dtRaw: Float, sample: TrackingSample?, nowNs: Long? = null) {
+        interpolating = nowNs != null
         val dt = dtRaw.coerceIn(0f, 0.1f)
         timeSec += dt
         measureFps(dt)
@@ -183,8 +197,22 @@ class GameController(
         if (fresh) {
             lastSampleNs = sample!!.timestampNs
             lastSample = sample
+            if (interpolating && sample.frontCamera == settings.frontCamera) interpolator.push(sample)
             processSample(sample, dt)
-        } else if (timeSec - lastHandSeen < HAND_LOSS_GRACE) {
+        }
+        if (interpolating) {
+            if (timeSec - lastHandSeen < HAND_LOSS_GRACE) {
+                val display = nowNs!! - interpolator.delayNs
+                val s = interpolator.latest
+                val hand = interpolator.handAt(display)
+                if (hand != null && s != null) {
+                    rig.update(
+                        hand, s.frontCamera, s.imageWidth, s.imageHeight,
+                        calibration, settings, handedness != Handedness.LEFT, view, display / 1e9,
+                    )
+                }
+            }
+        } else if (!fresh && timeSec - lastHandSeen < HAND_LOSS_GRACE) {
             // Tracking runs at ~30 fps and rendering at 60: keep the smoothing running every frame
             // on the latest sample so the hand glides between tracking updates instead of stepping.
             lastSample?.let { if (it.hand != null && it.frontCamera == settings.frontCamera) updateRig(it) }
@@ -221,7 +249,8 @@ class GameController(
         }
 
         val t = timeSec
-        updateRig(sample)
+        if (interpolating) rig.measure(hand, sample.frontCamera, sample.imageWidth, sample.imageHeight, calibration)
+        else updateRig(sample)
         gestures.update(rig.gestureShape, rig.pinch2d)
 
         anchorHistory.addLast(t to currentAnchor())

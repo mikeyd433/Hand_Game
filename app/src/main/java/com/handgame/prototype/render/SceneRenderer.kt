@@ -47,7 +47,7 @@ import kotlin.math.sin
 class SceneRenderer(
     private val surfaceView: SurfaceView,
     private val game: GameController,
-    private val onFrame: (dt: Float) -> Unit,
+    private val onFrame: (dt: Float, frameTimeNanos: Long) -> Unit,
 ) : Choreographer.FrameCallback {
 
     private val engine: Engine
@@ -343,7 +343,7 @@ class SceneRenderer(
         val dt = if (lastFrameNs == 0L) 1f / 60f else ((frameTimeNanos - lastFrameNs) / 1e9f)
         lastFrameNs = frameTimeNanos
         timeSec += dt
-        onFrame(dt)
+        onFrame(dt, frameTimeNanos)
         syncScene()
 
         val sc = swapChain ?: return

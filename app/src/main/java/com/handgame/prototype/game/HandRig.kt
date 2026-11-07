@@ -95,6 +95,18 @@ class HandRig {
         depthFilter.reset()
     }
 
+    /**
+     * Measures the raw tracked hand for gesture detection ([gestureShape], [pinch2d]) without
+     * moving the drawn pose. The game calls this on each new tracking result, while the pose itself
+     * is driven by [update] with the time-interpolated hand.
+     */
+    fun measure(hand: RawHand, frontCamera: Boolean, imageWidth: Int, imageHeight: Int, cal: Calibration) {
+        HandMeasure.gameShape(hand, frontCamera, rawShape)
+        val scale = HandLook.palmLength / cal.worldPalmLength.coerceIn(0.04f, 0.2f)
+        for (i in 0 until Lm.COUNT) gestureShape[i] = rawShape[i] * scale
+        pinch2d = HandMeasure.imagePinch(hand, imageWidth, imageHeight)
+    }
+
     fun update(
         hand: RawHand,
         frontCamera: Boolean,
@@ -107,10 +119,7 @@ class HandRig {
         t: Double,
     ) {
         // --- Shape -------------------------------------------------------------------------
-        HandMeasure.gameShape(hand, frontCamera, rawShape)
-        val scale = HandLook.palmLength / cal.worldPalmLength.coerceIn(0.04f, 0.2f)
-        for (i in 0 until Lm.COUNT) gestureShape[i] = rawShape[i] * scale
-        pinch2d = HandMeasure.imagePinch(hand, imageWidth, imageHeight)
+        measure(hand, frontCamera, imageWidth, imageHeight, cal)
 
         // The skeleton's conventions flip with handedness, so start its filters fresh on a flip.
         if (lastRightHand != rightHand) { angleFilter.reset(); palmFilter.reset(); lastRightHand = rightHand }

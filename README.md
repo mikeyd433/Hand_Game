@@ -126,6 +126,10 @@ app/src/main/java/com/handgame/prototype/
   direction and bend), clamp them to real hand limits and smooth them. Noisy landmark depth can't
   stretch or fold the fingers. Gestures still use the raw landmarks so they stay responsive.
   Smoothing runs every rendered frame, so the hand glides between ~30 fps tracking updates.
+- **Even pacing:** tracking results arrive unevenly (17/33/50 ms apart). Each result keeps the time
+  its camera frame was captured, and the hand is drawn ~55 ms behind real time, blended between
+  the two nearest results (`SampleInterpolator`). Without this the hand froze and then jumped.
+  Gestures still use each new result immediately.
 - **Handedness:** MediaPipe labels assume a mirrored selfie image, so the label is inverted for our
   images and then majority-voted over about 20 frames. You can override it in settings.
 - **Screen-wide reach:** the calibrated movement range maps to screen coordinates (nearly

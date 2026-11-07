@@ -122,7 +122,11 @@ class HandTracker(private val context: Context) {
         }
     }
 
+    /** Capture time (System.nanoTime) of each frame sent to MediaPipe, keyed by its timestamp. */
+    private val captureTimes = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+
     private fun analyze(proxy: ImageProxy) {
+        val captureNs = System.nanoTime()
         val lm = landmarker
         if (lm == null) { proxy.close(); return }
         val upright: Bitmap
@@ -153,6 +157,8 @@ class HandTracker(private val context: Context) {
         var ts = SystemClock.uptimeMillis()
         if (ts <= lastTimestampMs) ts = lastTimestampMs + 1
         lastTimestampMs = ts
+        captureTimes[ts] = captureNs
+        if (captureTimes.size > 32) captureTimes.keys.filter { it < ts - 2000 }.forEach { captureTimes.remove(it) }
         val image: MPImage = BitmapImageBuilder(upright).build()
         try {
             lm.detectAsync(image, ts)
@@ -183,7 +189,9 @@ class HandTracker(private val context: Context) {
         }
         latest.set(
             TrackingSample(
-                timestampNs = System.nanoTime(),
+                // When the camera frame was taken (not when the result arrived), so the game can
+                // pace the hand evenly even though results arrive unevenly.
+                timestampNs = captureTimes.remove(result.timestampMs()) ?: System.nanoTime(),
                 hand = hand,
                 imageWidth = size.width,
                 imageHeight = size.height,

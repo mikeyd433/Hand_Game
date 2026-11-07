@@ -86,6 +86,15 @@ class TuningAnalyzer(
             Locale.US, fps, m["hand_seen_pct"], m["inference_ms"], present.map { it.confidence.toDouble() }.averageOr0(),
             gaps.size, gaps.sumOf { it.second - it.first }))
 
+        run {
+            val (oldStutter, newStutter) = renderStutter(rec)
+            m["render_stutter_mm"] = newStutter
+            m["render_stutter_on_arrival_mm"] = oldStutter
+            out.line("render: stutter %.2f mm/frame at 60 Hz (%.2f if results were used on arrival)%s".format(
+                Locale.US, newStutter, oldStutter,
+                if (rec.events.filterIsInstance<Recording.Sample>().any { it.ct != null }) "" else ", capture times estimated"))
+        }
+
         // --- Per guided step -------------------------------------------------------------------
         for (step in listOf("still_open", "still_relaxed")) {
             val fs = inStep(frames, intervals, step, settle = 1.0).filter { it.present }
@@ -196,6 +205,58 @@ class TuningAnalyzer(
             }
         }
         return frames
+    }
+
+    /**
+     * Simulates the game's 60 Hz draw loop and measures stutter (frame-to-frame change in hand
+     * motion): once using each result when it arrives, once with capture-time interpolation (what
+     * the game does). Older recordings lack capture times; they're estimated from arrival times.
+     */
+    fun renderStutter(rec: Recording): Pair<Double, Double> {
+        val samples = rec.events.filterIsInstance<Recording.Sample>()
+        val cfgs = rec.events.filterIsInstance<Recording.Config>()
+        if (samples.size < 10 || cfgs.isEmpty()) return 0.0 to 0.0
+        val cfg = cfgs.last()
+        val settings = settingsOverride?.invoke(cfg.settings) ?: cfg.settings
+        val cal = calibrationOverride?.invoke(cfg.calibration) ?: cfg.calibration
+        val arrival = samples.map { it.t }
+        val capture = if (samples.all { it.ct != null }) samples.map { it.ct!! } else arrival.indices.map { i ->
+            val lo = maxOf(0, i - 6); val hi = minOf(arrival.size - 1, i + 6)
+            val xs = (lo..hi).map { it.toDouble() }; val ys = (lo..hi).map { arrival[it] }
+            val mx = xs.average(); val my = ys.average()
+            val slope = xs.zip(ys).sumOf { (x, y) -> (x - mx) * (y - my) } / xs.sumOf { (it - mx) * (it - mx) }
+            my + slope * (i - mx) - 0.030
+        }
+        fun ts(i: Int, t: Double): com.handgame.prototype.tracking.TrackingSample {
+            val s = samples[i]
+            return com.handgame.prototype.tracking.TrackingSample((t * 1e9).toLong(), s.image?.let { RawHand(it, s.world!!, s.label, s.confidence) },
+                s.imageWidth, s.imageHeight, s.frontCamera, s.inferenceMs)
+        }
+        fun run(interpolate: Boolean): Double {
+            val rig = HandRig(); rig.applySettings(settings)
+            com.handgame.prototype.game.HandLook.scale = settings.handScale
+            val view = ViewRig()
+            val interp = com.handgame.prototype.tracking.SampleInterpolator()
+            val palms = ArrayList<Vec3>()
+            var next = 0
+            var latest: RawHand? = null
+            var frame = arrival.first()
+            while (frame < rec.duration) {
+                while (next < samples.size && arrival[next] <= frame) {
+                    latest = samples[next].image?.let { RawHand(it, samples[next].world!!, samples[next].label, samples[next].confidence) } ?: latest
+                    interp.push(ts(next, capture[next])); next++
+                }
+                val hand = if (interpolate) interp.handAt(((frame - interp.delayNs / 1e9) * 1e9).toLong()) else latest
+                if (hand != null) {
+                    rig.update(hand, samples[0].frontCamera, samples[0].imageWidth, samples[0].imageHeight, cal, settings, true, view, frame)
+                    palms += rig.pose.palmCenter
+                }
+                frame += 1.0 / 60
+            }
+            val v = palms.zipWithNext { a, b -> b - a }
+            return if (v.size < 2) 0.0 else v.zipWithNext { a, b -> (b - a).length().toDouble() }.average() * 1000
+        }
+        return run(false) to run(true)
     }
 
     fun intervals(rec: Recording): List<Interval> {

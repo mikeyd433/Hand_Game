@@ -142,11 +142,11 @@ class MainActivity : ComponentActivity() {
         tracker.start(this, settings.value.frontCamera)
     }
 
-    private fun onFrame(dt: Float) {
+    private fun onFrame(dt: Float, frameTimeNanos: Long) {
         val sample = tracker.latest.get()
-        game.update(dt, sample)
+        game.update(dt, sample, frameTimeNanos)
         if (recorder.active) {
-            recorder.onFrame(dt, sample, game)
+            recorder.onFrame(dt, sample, game, frameTimeNanos)
             if (recorder.finished) finishTuning()
         }
         // Push state to Compose at ~20 Hz; the 3D view itself updates every frame.
@@ -182,7 +182,7 @@ class MainActivity : ComponentActivity() {
             "app" to BuildConfig.VERSION_NAME,
             "gpu" to tracker.usingGpu,
         )
-        recorder.start(guided, info, settings.value.frontCamera)
+        recorder.start(guided, info, settings.value.frontCamera, System.nanoTime())
         tuning.value = TuningUi(mode = if (guided) TuningMode.GUIDED else TuningMode.FREE)
     }
 

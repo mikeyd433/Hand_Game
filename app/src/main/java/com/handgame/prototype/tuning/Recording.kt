@@ -30,6 +30,8 @@ class Recording(val header: Map<String, Any?>, val events: List<Event>) {
         val holding: Boolean,
         val phase: String,
         val lift: Float,
+        /** Camera capture time, seconds since recording start (null in older recordings). */
+        val ct: Double? = null,
     ) : Event()
 
     /** A guided-test prompt: from [t], the player should be doing [expect] as part of [step]. */
@@ -53,6 +55,7 @@ class Recording(val header: Map<String, Any?>, val events: List<Event>) {
                     "k" to "s", "t" to e.t, "img" to e.image, "w" to e.world, "lab" to e.label,
                     "c" to e.confidence, "inf" to e.inferenceMs, "iw" to e.imageWidth, "ih" to e.imageHeight,
                     "front" to e.frontCamera, "g" to e.gesture, "hold" to e.holding, "ph" to e.phase, "lift" to e.lift,
+                    "ct" to e.ct,
                 )
                 is Cue -> linkedMapOf("k" to "cue", "t" to e.t, "step" to e.step, "expect" to e.expect)
                 is Mark -> linkedMapOf("k" to "mark", "t" to e.t, "kind" to e.kind)
@@ -78,6 +81,7 @@ class Recording(val header: Map<String, Any?>, val events: List<Event>) {
                         t, m.floats("img"), m.floats("w"), m.str("lab"), m.num("c").toFloat(), m.num("inf").toFloat(),
                         m.num("iw").toInt(), m.num("ih").toInt(), m["front"] == true,
                         m.str("g") ?: "OPEN", m["hold"] == true, m.str("ph") ?: "", m.num("lift").toFloat(),
+                        m["ct"] as? Double,
                     )
                     "cue" -> Cue(t, m.str("step") ?: "", m.str("expect") ?: "")
                     "mark" -> Mark(t, m.str("kind") ?: "other")
@@ -178,7 +182,11 @@ class TuningRecorder {
     var finished = false
         private set
 
-    fun start(guided: Boolean, info: Map<String, Any?>, frontCamera: Boolean) {
+    private var startNs = 0L
+
+    /** @param nowNs System.nanoTime at start, to express capture times relative to the recording. */
+    fun start(guided: Boolean, info: Map<String, Any?>, frontCamera: Boolean, nowNs: Long = 0L) {
+        startNs = nowNs
         events.clear()
         time = 0.0
         lastSampleNs = 0L
@@ -197,9 +205,11 @@ class TuningRecorder {
         if (active) events += Recording.Mark(time, kind)
     }
 
-    fun onFrame(dt: Float, sample: TrackingSample?, game: GameController) {
+    fun onFrame(dt: Float, sample: TrackingSample?, game: GameController, nowNs: Long? = null) {
         if (!active) return
         time += dt
+        // Keep the recording clock on real time when available (so capture times line up).
+        if (nowNs != null && startNs != 0L) time = (nowNs - startNs) / 1e9
         if (game.settings != lastSettings || game.calibration != lastCalibration) {
             lastSettings = game.settings; lastCalibration = game.calibration
             events += Recording.Config(time, game.settings, game.calibration)
@@ -212,6 +222,7 @@ class TuningRecorder {
                 time, h?.image?.copyOf(), h?.world?.copyOf(), h?.mpLabel, h?.confidence ?: 0f, sample.inferenceMs,
                 sample.imageWidth, sample.imageHeight, sample.frontCamera,
                 game.gestures.state.name, game.holding, game.phase.name, game.rig.pose.lift,
+                if (startNs != 0L) (sample.timestampNs - startNs) / 1e9 else null,
             )
         }
         if (guidedSteps == null && time > MAX_FREE_SECONDS) finished = true

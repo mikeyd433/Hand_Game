@@ -48,7 +48,10 @@ class RawHand(
     val confidence: Float,
 )
 
-/** One camera frame's tracking result. [hand] is null when no hand was found. */
+/**
+ * One camera frame's tracking result. [hand] is null when no hand was found. [timestampNs] is when
+ * the frame was captured (System.nanoTime clock).
+ */
 class TrackingSample(
     val timestampNs: Long,
     val hand: RawHand?,
