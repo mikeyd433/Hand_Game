@@ -213,11 +213,14 @@ class HandRig {
                 // Hand too big/close for the frame: use what there is, centered.
                 return Pair((safeLo + safeHi) / 2, MIN_RANGE)
             }
-            var lo = maxOf(center - range, safeLo)
-            var hi = minOf(center + range, safeHi)
+            // A small calibration sweep shouldn't make the hand twitchy: use at least most of the
+            // safe region.
+            val r = maxOf(range, MIN_SAFE_SHARE * (safeHi - safeLo) / 2)
+            var lo = maxOf(center - r, safeLo)
+            var hi = minOf(center + r, safeHi)
             if (hi - lo < 2 * MIN_RANGE) {
                 // Calibrated range sits mostly outside the safe region: shift it inside.
-                val mid = ((lo + hi) / 2).coerceIn(safeLo + MIN_RANGE, safeHi - MIN_RANGE)
+                val mid = ((lo + hi) / 2).coerceIn(safeLo + MIN_RANGE, maxOf(safeLo + MIN_RANGE, safeHi - MIN_RANGE))
                 lo = mid - MIN_RANGE; hi = mid + MIN_RANGE
             }
             // Lower sensitivity widens the box (more hand motion per screen width, so less shake),
@@ -225,7 +228,9 @@ class HandRig {
             // camera's view before reaching the screen edge.
             val half = minOf((hi - lo) / 2 / sensitivity.coerceAtLeast(0.1f), (safeHi - safeLo) / 2)
                 .coerceAtLeast((hi - lo) / 2)
-            val mid = ((lo + hi) / 2).coerceIn(safeLo + half, safeHi - half)
+            val minMid = safeLo + half; val maxMid = safeHi - half
+            // (When the box fills the safe region exactly, rounding can make minMid > maxMid.)
+            val mid = if (minMid >= maxMid) (safeLo + safeHi) / 2 else ((lo + hi) / 2).coerceIn(minMid, maxMid)
             return Pair(mid, half)
         }
         val (um, uh) = axis(cal.centerU, cal.rangeU, ext[0], ext[1])
@@ -276,9 +281,16 @@ class HandRig {
          */
         const val LIFT_DEAD_ZONE = 1.15f
         const val MIN_RANGE = 0.07f
-        const val EDGE_MARGIN = 0.025f
-        /** Extra room on the measured open-hand reach (hands turn and spread while playing). */
-        const val EXTENT_SLACK = 1.1f
+        const val EDGE_MARGIN = 0f
+        /**
+         * Share of the measured open-hand reach that must stay inside the frame. Below 1 because
+         * MediaPipe keeps tracking with the thumb or fingertips a little out of frame (a guided
+         * recording ranged well past the full-reach limit with zero dropouts), and every bit of
+         * extra room lowers the gain, and so the shake.
+         */
+        const val EXTENT_SLACK = 0.8f
+        /** The play box spans at least this share of the safe region, whatever the sweep was. */
+        const val MIN_SAFE_SHARE = 0.75f
         /** Start warning when a landmark is this close (normalized) to the frame edge. */
         const val EDGE_WARN = 0.07f
 

@@ -83,3 +83,25 @@ class ViewAndDepthTest {
         assertTrue(ndcAt(0.5f, 0.9f).second < -0.85f)
     }
 }
+
+class PlayBoxTest {
+    /** Regression: a box that exactly fills the safe region used to throw from coerceIn. */
+    @Test fun neverThrowsAndStaysInsideTheFrame() {
+        val rig = HandRig()
+        val rnd = kotlin.random.Random(5)
+        repeat(20000) {
+            val cal = GameController.DEFAULT_CALIBRATION.copy(
+                baseSize = 0.1f + rnd.nextFloat() * 0.35f,
+                centerU = rnd.nextFloat(), centerV = rnd.nextFloat(),
+                rangeU = rnd.nextFloat() * 0.5f, rangeV = rnd.nextFloat() * 0.5f,
+                extents = if (rnd.nextBoolean()) null else List(4) { rnd.nextFloat() * 0.5f },
+            )
+            val b = rig.playBox(cal, 480, 640, 0.3f + rnd.nextFloat() * 1.7f)
+            assertTrue(b.all { it.isFinite() } && b[1] > 0f && b[3] > 0f)
+        }
+        // The real case from the recording.
+        val real = GameController.DEFAULT_CALIBRATION.copy(baseSize = 0.3548f, centerU = 0.5255f, centerV = 0.5408f,
+            rangeU = 0.122f, rangeV = 0.146f, worldPalmLength = 0.0998f, extents = listOf(0.4472f, 0.1382f, 0.3545f, 0.2054f))
+        rig.playBox(real, 480, 640, 0.5f)
+    }
+}

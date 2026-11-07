@@ -88,7 +88,10 @@ class HandSkeletonTest {
             if (ndcY > 0.77f) { reachedTop = (0 until Lm.COUNT).minOf { hand.image[it * 2 + 1] }; break }
         }
         assertTrue("top of screen should be reachable", !reachedTop.isNaN())
-        assertTrue("fingers still in frame when reaching the top (min v=$reachedTop)", reachedTop > 0f)
+        // At most the allowed share of the hand's reach may go past the frame edge (MediaPipe keeps
+        // tracking a hand whose fingertips are slightly out of frame).
+        val allowed = (1f - HandRig.EXTENT_SLACK) * reach[2]
+        assertTrue("fingers at most ${"%.3f".format(allowed)} past the top (min v=$reachedTop)", reachedTop > -allowed - 0.005f)
     }
 
     @Test fun warnsNearTheFrameEdge() {
