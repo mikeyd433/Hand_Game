@@ -159,7 +159,7 @@ class TuningAnalyzer(
                 n("held_shake_mm")?.let { m["held_shake_mm"] = it }
                 n("error_mm")?.let { m["${o.step}_error_mm"] = it }
             }
-            val evts = rec.events.filterIsInstance<Recording.GameEvt>()
+            val evts = rec.events.filterIsInstance<Recording.GameEvt>().filter { it.t > 0.05 }
             val forced = evts.count { it.kind == "drop_forced" }
             if (forced > 0) out.line("  cube let go by the game %d× (hand lost or paused)".format(Locale.US, forced))
         }

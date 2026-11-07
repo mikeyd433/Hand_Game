@@ -313,8 +313,10 @@ class TuningRecorder {
         private set
 
     /** @param nowNs System.nanoTime at start, to express capture times relative to the recording. */
-    fun start(guided: Boolean, info: Map<String, Any?>, frontCamera: Boolean, nowNs: Long = 0L) {
+    fun start(guided: Boolean, info: Map<String, Any?>, frontCamera: Boolean, nowNs: Long = 0L, game: GameController? = null) {
         startNs = nowNs
+        // Events from before the recording aren't part of it.
+        game?.drainEvents()
         events.clear()
         time = 0.0
         lastSampleNs = 0L

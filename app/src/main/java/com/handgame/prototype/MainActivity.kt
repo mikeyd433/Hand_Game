@@ -188,7 +188,7 @@ class MainActivity : ComponentActivity() {
             "app" to BuildConfig.VERSION_NAME,
             "gpu" to tracker.usingGpu,
         )
-        recorder.start(guided, info, settings.value.frontCamera, System.nanoTime())
+        recorder.start(guided, info, settings.value.frontCamera, System.nanoTime(), game)
         tuning.value = TuningUi(mode = if (guided) TuningMode.GUIDED else TuningMode.FREE)
     }
 

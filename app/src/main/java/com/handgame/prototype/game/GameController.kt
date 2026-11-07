@@ -108,10 +108,15 @@ class GameController(
     /** Optional target ring shown on the table (guided tasks). */
     var target: Target? = null
 
-    private val events = ArrayList<GameEvent>()
+    private val events = ArrayDeque<GameEvent>()
 
-    /** Returns and clears the events since the last call. */
+    /** Returns and clears the events since the last call. Only the latest few are kept between calls. */
     fun drainEvents(): List<GameEvent> = ArrayList(events).also { events.clear() }
+
+    private fun emit(e: GameEvent) {
+        events.addLast(e)
+        while (events.size > MAX_QUEUED_EVENTS) events.removeFirst()
+    }
 
     /** The gesture the cube is currently held with (OPEN when not holding). */
     val heldWith: Gesture get() = if (holding) grabGesture else Gesture.OPEN
@@ -463,7 +468,7 @@ class GameController(
         val aligned = (Quat.fromTo(cube.orientation.rotate(gripAxis), squeeze) * cube.orientation).normalized()
         heldRelRotation = (inv * cube.orientation).normalized()
         heldRelTarget = (inv * aligned).normalized()
-        events += GameEvent("grab", g.name, cube.position, 0f)
+        emit(GameEvent("grab", g.name, cube.position, 0f))
 
         // Settle position: centered between thumb and index, nudged away from the palm (pinch), or
         // resting flat under the palm and slightly toward the fingers (fist).
@@ -553,7 +558,7 @@ class GameController(
             cube.linearVelocity = Vec3.ZERO
             cube.angularVelocity = Vec3.ZERO
         }
-        events += GameEvent(if (throwIt) "release" else "drop_forced", grabGesture.name, cube.position, cube.linearVelocity.length())
+        emit(GameEvent(if (throwIt) "release" else "drop_forced", grabGesture.name, cube.position, cube.linearVelocity.length()))
         onHaptic(HapticEvent.RELEASE)
     }
 
@@ -593,7 +598,7 @@ class GameController(
 
     fun respawnCube() {
         releaseHeld(throwIt = false)
-        events += GameEvent("respawn", "", cube.position, 0f)
+        emit(GameEvent("respawn", "", cube.position, 0f))
         cube.position = Vec3(0f, 0.35f, 0f)
         cube.orientation = Quat.fromAxisAngle(Vec3(0.3f, 1f, 0.2f), 0.5f)
         cube.linearVelocity = Vec3.ZERO
@@ -658,6 +663,8 @@ class GameController(
         const val HAND_LOSS_GRACE = 0.4
         const val RESUME_SECONDS = 1.2f
         const val GRAB_RANGE = 0.06f
+        /** Cube events kept while nobody is recording them. */
+        const val MAX_QUEUED_EVENTS = 64
         /** How quickly collision corrections ease in (per second; ~60 ms to settle). */
         const val COLLISION_EASE = 30f
         /** How far above the cube a grab still reaches (see [overheadDistance]). */

@@ -161,6 +161,17 @@ class TuningTest {
         assertTrue("size ${text.length}", text.length < 3_000_000)
     }
 
+    @Test fun eventsFromBeforeTheRecordingAreDropped() {
+        val game = GameController(GameSettings(), null)
+        game.respawnCube(); game.respawnCube() // events while nobody records
+        val rec = TuningRecorder()
+        rec.start(guided = false, info = emptyMap(), frontCamera = true, game = game)
+        rec.onFrame(1 / 60f, null, game)
+        assertTrue(rec.stop().events.none { it is Recording.GameEvt })
+        repeat(500) { game.respawnCube() }
+        assertTrue("queue is bounded", game.drainEvents().size <= GameController.MAX_QUEUED_EVENTS)
+    }
+
     @Test fun replayMatchesTheLiveGame() {
         val rec = syntheticGuidedRecording()
         val frames = TuningAnalyzer().replay(rec)
