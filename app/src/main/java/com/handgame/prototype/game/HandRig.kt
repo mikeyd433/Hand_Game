@@ -30,6 +30,8 @@ object PlaySpace {
 /** The hand's pose in world space for one frame. */
 class HandPose {
     val joints = Array(Lm.COUNT) { Vec3.ZERO }
+    /** Joints as drawn: [joints] adjusted by [GripSolver] so the hand holds things convincingly. */
+    val renderJoints = Array(Lm.COUNT) { Vec3.ZERO }
     var palmCenter = Vec3.ZERO
     var rotation = Quat.IDENTITY
     /** Midpoint of thumb tip and index tip: where a pinch holds things. */

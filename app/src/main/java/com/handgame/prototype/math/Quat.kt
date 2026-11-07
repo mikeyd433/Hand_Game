@@ -80,6 +80,18 @@ data class Quat(val x: Float, val y: Float, val z: Float, val w: Float) {
             return q.normalized()
         }
 
+        /** Shortest rotation taking unit vector [from] onto unit vector [to]. */
+        fun fromTo(from: Vec3, to: Vec3): Quat {
+            val d = from dot to
+            if (d > 0.99999f) return IDENTITY
+            if (d < -0.99999f) {
+                val helper = if (kotlin.math.abs(from.x) < 0.9f) Vec3(1f, 0f, 0f) else Vec3(0f, 1f, 0f)
+                return fromAxisAngle(from cross helper, kotlin.math.PI.toFloat())
+            }
+            val a = from cross to
+            return Quat(a.x, a.y, a.z, 1f + d).normalized()
+        }
+
         /** Shortest-path spherical interpolation. */
         fun slerp(a: Quat, b0: Quat, t: Float): Quat {
             var b = b0

@@ -26,6 +26,7 @@ import com.google.android.filament.Viewport
 import com.google.android.filament.android.DisplayHelper
 import com.google.android.filament.android.UiHelper
 import com.handgame.prototype.game.GameController
+import com.handgame.prototype.game.HandLook
 import com.handgame.prototype.game.Phase
 import com.handgame.prototype.game.PlaySpace
 import com.handgame.prototype.math.Mat4
@@ -350,7 +351,7 @@ class SceneRenderer(
         handMaterial.setParameter("glow", 0.6f * dim, 0.7f * dim, 1.0f * dim, 1f)
 
         val pose = game.rig.pose
-        val j = pose.joints
+        val j = pose.renderJoints
         for (i in 0 until Lm.COUNT) {
             val r = jointRadius(i)
             setTransform(jointEntities[i], Mat4.trs(mat, j[i], Quat.IDENTITY, r, r, r))
@@ -363,17 +364,10 @@ class SceneRenderer(
         val width = j[Lm.INDEX_MCP].distance(j[Lm.PINKY_MCP]) * 0.62f + 0.02f
         val length = j[Lm.WRIST].distance(j[Lm.MIDDLE_MCP]) * 0.55f + 0.01f
         val center = (j[Lm.WRIST] + j[Lm.INDEX_MCP] + j[Lm.PINKY_MCP] + j[Lm.MIDDLE_MCP]) * 0.25f
-        setTransform(palmEntity, Mat4.trs(mat, center, pose.rotation, width, 0.034f, length))
+        setTransform(palmEntity, Mat4.trs(mat, center, pose.rotation, width, HandLook.PALM_HALF_THICKNESS, length))
     }
 
-    private fun jointRadius(i: Int): Float = when (i) {
-        Lm.WRIST -> 0.034f
-        Lm.THUMB_CMC, Lm.THUMB_MCP -> 0.026f
-        Lm.INDEX_MCP, Lm.MIDDLE_MCP, Lm.RING_MCP, Lm.PINKY_MCP -> 0.026f
-        Lm.THUMB_TIP, Lm.INDEX_TIP, Lm.MIDDLE_TIP, Lm.RING_TIP -> 0.024f
-        Lm.PINKY_TIP, Lm.PINKY_DIP, Lm.PINKY_PIP -> 0.019f
-        else -> PlaySpace.FINGER_RADIUS
-    }
+    private fun jointRadius(i: Int): Float = HandLook.jointRadius(i)
 
     fun destroy() {
         pause()

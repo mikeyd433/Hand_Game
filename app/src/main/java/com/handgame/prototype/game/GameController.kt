@@ -11,6 +11,7 @@ import com.handgame.prototype.physics.RigidBox
 import com.handgame.prototype.tracking.HandMeasure
 import com.handgame.prototype.tracking.Handedness
 import com.handgame.prototype.tracking.HandednessVoter
+import com.handgame.prototype.tracking.Lm
 import com.handgame.prototype.tracking.TrackingSample
 import kotlin.math.abs
 
@@ -102,6 +103,12 @@ class GameController(
     private var heldLocalOffset = Vec3.ZERO
     private var heldTargetOffset = Vec3.ZERO
     private var heldRelRotation = Quat.IDENTITY
+    private var heldRelTarget = Quat.IDENTITY
+    /** Cube-local axis facing the thumb (pinch) or the palm (fist). */
+    private var gripAxis = Vec3.UP
+    /** 0..1 blend of the drawn grip pose. Fades out after release. */
+    var gripWeight = 0f
+        private set
     private val anchorHistory = ArrayDeque<Pair<Double, Vec3>>()
 
     // Pause / resume.
@@ -181,6 +188,7 @@ class GameController(
             }
         }
         checkCubeBounds(dt)
+        updateGripPose(dt)
         if (handFoundFlashTimer > 0f) handFoundFlashTimer -= dt
     }
 
@@ -291,7 +299,7 @@ class GameController(
     // ------------------------------------------------------------------------------------------
 
     private fun currentAnchor(): Vec3 =
-        if (holding && grabGesture == Gesture.FIST) rig.pose.fistPoint else rig.pose.pinchPoint
+        if (holding && grabGesture == Gesture.FIST) rig.pose.palmCenter else rig.pose.pinchPoint
 
     private fun reachDistance(): Float {
         val p = rig.pose
@@ -318,6 +326,7 @@ class GameController(
                 // A loosening fist can read as a pinch; keep holding either way.
                 // Soft snap: ease the held offset toward its settled position.
                 heldLocalOffset = Vec3.lerp(heldLocalOffset, heldTargetOffset, 0.18f)
+                heldRelRotation = Quat.slerp(heldRelRotation, heldRelTarget, 0.18f)
             }
         }
     }
@@ -328,23 +337,69 @@ class GameController(
         cube.held = true
         cube.wake()
         val p = rig.pose
-        val anchor = if (g == Gesture.FIST) p.fistPoint else p.pinchPoint
+        val anchor = grabAnchor(g)
         val inv = p.rotation.conjugate()
         heldLocalOffset = inv.rotate(cube.position - anchor)
-        // Settle the cube so its surface sits at the grab point (pinch) or snug under the palm (fist).
-        val maxLen = if (g == Gesture.FIST) PlaySpace.CUBE_HALF * 0.6f else PlaySpace.CUBE_HALF * 1.05f
-        heldTargetOffset = heldLocalOffset.clampLength(maxLen)
+
+        // Which way the grip squeezes: thumb → index for a pinch, palm-down for a fist.
+        val palmUp = p.rotation.rotate(Vec3.UP)
+        val squeeze = if (g == Gesture.PINCH) {
+            val d = p.joints[Lm.THUMB_TIP] - p.joints[Lm.INDEX_TIP]
+            if (d.length() > 1e-3f) d.normalized() else p.rotation.rotate(Vec3(1f, 0f, 0f))
+        } else palmUp
+        // Turn the cube (softly) so a face lines up with the squeeze, letting fingers sit flat on it.
+        gripAxis = GripSolver.nearestAxis(cube, squeeze)
+        val aligned = (Quat.fromTo(cube.orientation.rotate(gripAxis), squeeze) * cube.orientation).normalized()
         heldRelRotation = (inv * cube.orientation).normalized()
+        heldRelTarget = (inv * aligned).normalized()
+
+        // Settle position: centered between thumb and index, nudged away from the palm (pinch), or
+        // resting flat under the palm and slightly toward the fingers (fist).
+        heldTargetOffset = if (g == Gesture.FIST) {
+            Vec3(0f, -(HandLook.PALM_HALF_THICKNESS + PlaySpace.CUBE_HALF + 0.004f), -0.03f)
+        } else {
+            val out = (p.pinchPoint - p.palmCenter).normalized()
+            inv.rotate(out * 0.015f)
+        }
         onHaptic(HapticEvent.GRAB)
     }
 
     private fun heldTarget(): Pair<Vec3, Quat> {
         val p = rig.pose
-        val anchor = if (grabGesture == Gesture.FIST) p.fistPoint else p.pinchPoint
-        var pos = anchor + p.rotation.rotate(heldLocalOffset)
+        var pos = grabAnchor(grabGesture) + p.rotation.rotate(heldLocalOffset)
         if (pos.y < PlaySpace.CUBE_HALF * 0.9f) pos = Vec3(pos.x, PlaySpace.CUBE_HALF * 0.9f, pos.z)
         return pos to (p.rotation * heldRelRotation).normalized()
     }
+
+    private fun grabAnchor(g: Gesture): Vec3 =
+        if (g == Gesture.FIST) rig.pose.palmCenter else rig.pose.pinchPoint
+
+    /** Computes the drawn hand: blends the grip pose in/out and keeps fingers out of the cube. */
+    private fun updateGripPose(dt: Float) {
+        val target = if (holding) 1f else 0f
+        gripWeight += (target - gripWeight) * (12f * dt).coerceAtMost(1f)
+        if (!holding && gripWeight < 0.01f) gripWeight = 0f
+        val p = rig.pose
+        if (holding) {
+            val forward = p.rotation.rotate(Vec3(0f, 0f, -1f))
+            val right = p.rotation.rotate(Vec3(1f, 0f, 0f))
+            val thumbSide = if ((p.joints[Lm.THUMB_MCP] - p.palmCenter) dot right >= 0f) right else -right
+            GripSolver.solve(p.joints, p.renderJoints, cube, grabGesture, gripAxis, gripWeight, forward, thumbSide)
+            for (i in gripOffsets.indices) gripOffsets[i] = p.renderJoints[i] - p.joints[i]
+        } else {
+            // After release, let the fingers relax back to the tracked pose instead of snapping
+            // (or chasing a thrown cube).
+            val decay = kotlin.math.exp(-14f * dt)
+            for (i in gripOffsets.indices) {
+                gripOffsets[i] = gripOffsets[i] * decay
+                relaxed[i] = p.joints[i] + gripOffsets[i]
+            }
+            GripSolver.solve(relaxed, p.renderJoints, cube, Gesture.OPEN, gripAxis, 0f, Vec3.ZERO, Vec3.ZERO)
+        }
+    }
+
+    private val gripOffsets = Array(Lm.COUNT) { Vec3.ZERO }
+    private val relaxed = Array(Lm.COUNT) { Vec3.ZERO }
 
     private fun releaseHeld(throwIt: Boolean) {
         if (!holding) return
