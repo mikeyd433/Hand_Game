@@ -1,0 +1,11 @@
+.gradle/
+build/
+/local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+# Downloaded at build time by the downloadHandModel task
+app/src/main/assets/hand_landmarker.task
