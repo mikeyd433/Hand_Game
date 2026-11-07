@@ -68,6 +68,14 @@ fun GameScreen(
     onRecalibrate: () -> Unit,
     onSkipRange: () -> Unit,
     onResetCube: () -> Unit,
+    tuning: TuningUi = TuningUi(),
+    canTune: Boolean = false,
+    onStartTuning: (guided: Boolean) -> Unit = {},
+    onStopTuning: () -> Unit = {},
+    onMark: (String) -> Unit = {},
+    onSaveRecording: () -> Unit = {},
+    onCopySummary: () -> Unit = {},
+    onCloseResults: () -> Unit = {},
 ) {
     var showSettings by remember { mutableStateOf(false) }
 
@@ -100,7 +108,12 @@ fun GameScreen(
                     ui.debug?.let { DebugOverlay(it, debugFrame, frontCamera, Modifier.align(Alignment.TopStart)) }
                 }
 
-                when (ui.phase) {
+                // While a guided test runs, its card replaces the pause/resume prompts at the bottom.
+                if (tuning.mode != TuningMode.IDLE) {
+                    TuningOverlay(tuning, onStopTuning, onMark, onSaveRecording, onCopySummary, onCloseResults)
+                }
+
+                if (tuning.mode != TuningMode.GUIDED) when (ui.phase) {
                     Phase.CALIBRATING -> CalibrationOverlay(ui, frontCamera, onSkipRange, Modifier.align(Alignment.BottomCenter))
                     Phase.PAUSED -> PausedOverlay(frontCamera, Modifier.align(Alignment.Center))
                     Phase.RESUMING -> ResumeOverlay(ui, Modifier.align(Alignment.Center))
@@ -124,6 +137,8 @@ fun GameScreen(
                         onRecalibrate = { onRecalibrate(); showSettings = false },
                         onResetCube = { onResetCube(); showSettings = false },
                         onClose = { showSettings = false },
+                        canTune = canTune && tuning.mode == TuningMode.IDLE,
+                        onStartTuning = { guided -> onStartTuning(guided); showSettings = false },
                     )
                 }
             }

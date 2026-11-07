@@ -27,6 +27,19 @@ import com.handgame.prototype.render.SceneRenderer
 import com.handgame.prototype.tracking.HandTracker
 import com.handgame.prototype.ui.GameScreen
 import com.handgame.prototype.ui.PermissionScreen
+import com.handgame.prototype.ui.TuningMode
+import com.handgame.prototype.ui.TuningUi
+import com.handgame.prototype.tuning.Recording
+import com.handgame.prototype.tuning.TuningAnalyzer
+import com.handgame.prototype.tuning.TuningRecorder
+import com.handgame.prototype.game.Phase
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.widget.Toast
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.zip.GZIPOutputStream
 
 class MainActivity : ComponentActivity() {
 
@@ -41,6 +54,22 @@ class MainActivity : ComponentActivity() {
     private val hasPermission = mutableStateOf(false)
     private val trackerError = mutableStateOf<String?>(null)
     private var uiTimer = 0f
+
+    // Tuning recorder.
+    private val recorder = TuningRecorder()
+    private val tuning = mutableStateOf(TuningUi())
+    private var lastRecording: Recording? = null
+    private var markCount = 0
+    private val saveLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("application/gzip")) { uri ->
+        val rec = lastRecording ?: return@registerForActivityResult
+        if (uri == null) return@registerForActivityResult
+        runCatching {
+            contentResolver.openOutputStream(uri)!!.use { os ->
+                GZIPOutputStream(os).use { it.write(rec.toJsonLines().toByteArray()) }
+            }
+        }.onSuccess { Toast.makeText(this, "Recording saved", Toast.LENGTH_SHORT).show() }
+            .onFailure { Toast.makeText(this, "Couldn't save: ${it.message}", Toast.LENGTH_LONG).show() }
+    }
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -89,6 +118,14 @@ class MainActivity : ComponentActivity() {
                     onRecalibrate = { game.recalibrate() },
                     onSkipRange = { game.skipRangeCalibration() },
                     onResetCube = { game.respawnCube() },
+                    tuning = tuning.value,
+                    canTune = ui.value.phase != Phase.CALIBRATING,
+                    onStartTuning = ::startTuning,
+                    onStopTuning = ::finishTuning,
+                    onMark = { recorder.mark(it); markCount++ },
+                    onSaveRecording = ::saveRecording,
+                    onCopySummary = ::copySummary,
+                    onCloseResults = { tuning.value = TuningUi() },
                 )
             }
         }
@@ -106,7 +143,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun onFrame(dt: Float) {
-        game.update(dt, tracker.latest.get())
+        val sample = tracker.latest.get()
+        game.update(dt, sample)
+        if (recorder.active) {
+            recorder.onFrame(dt, sample, game)
+            if (recorder.finished) finishTuning()
+        }
         // Push state to Compose at ~20 Hz; the 3D view itself updates every frame.
         uiTimer += dt
         if (uiTimer >= 0.05f) {
@@ -115,7 +157,56 @@ class MainActivity : ComponentActivity() {
             ui.value = game.uiSnapshot(withDebug)
             if (withDebug) debugFrame.value = tracker.debugFrame.get()
             trackerError.value = tracker.error
+            if (recorder.active) {
+                val step = recorder.currentStep
+                tuning.value = tuning.value.copy(
+                    stepTitle = step?.title ?: "",
+                    prompt = step?.prompt ?: "",
+                    cue = recorder.currentCue,
+                    stepProgress = recorder.stepProgress,
+                    stepNumber = recorder.stepNumber,
+                    stepCount = recorder.guidedSteps?.size ?: 0,
+                    elapsed = recorder.time.toFloat(),
+                    marks = markCount,
+                )
+            }
         }
+    }
+
+    private fun startTuning(guided: Boolean) {
+        markCount = 0
+        val info = linkedMapOf<String, Any?>(
+            "created" to SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date()),
+            "device" to "${Build.MANUFACTURER} ${Build.MODEL}",
+            "android" to Build.VERSION.SDK_INT,
+            "app" to BuildConfig.VERSION_NAME,
+            "gpu" to tracker.usingGpu,
+        )
+        recorder.start(guided, info, settings.value.frontCamera)
+        tuning.value = TuningUi(mode = if (guided) TuningMode.GUIDED else TuningMode.FREE)
+    }
+
+    private fun finishTuning() {
+        if (!recorder.active) return
+        val rec = recorder.stop()
+        lastRecording = rec
+        val summary = runCatching { TuningAnalyzer().analyze(rec).text }
+            .getOrElse { "Analysis failed: ${it.message}" }
+        // The replay can change the global hand scale; restore the live setting.
+        com.handgame.prototype.game.HandLook.scale = settings.value.handScale
+        tuning.value = TuningUi(mode = TuningMode.RESULTS, summary = summary)
+    }
+
+    private fun saveRecording() {
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
+        val kind = if (lastRecording?.guided == true) "guided" else "play"
+        saveLauncher.launch("hand-tuning-$kind-$stamp.jsonl.gz")
+    }
+
+    private fun copySummary() {
+        val cm = getSystemService(ClipboardManager::class.java)
+        cm?.setPrimaryClip(ClipData.newPlainText("Hand tuning summary", tuning.value.summary))
+        Toast.makeText(this, "Summary copied", Toast.LENGTH_SHORT).show()
     }
 
     private fun applySettings(new: GameSettings) {

@@ -9,3 +9,7 @@ captures/
 .cxx/
 # Downloaded at build time by the downloadHandModel task
 app/src/main/assets/hand_landmarker.task
+
+# Personal hand-tracking recordings (see recordings/README.md)
+recordings/*
+!recordings/README.md

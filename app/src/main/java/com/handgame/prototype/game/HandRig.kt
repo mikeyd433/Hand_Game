@@ -44,6 +44,8 @@ class HandPose {
     var sizeRatio = 1f
     /** 0..1: how close the real hand is to leaving the camera's view. */
     var edgeWarning = 0f
+    /** Unsmoothed target position (before the position filter), for latency analysis. */
+    var rawTarget = Vec3.ZERO
     /** Which screen edge the hand is nearing: x −1 left / +1 right, y −1 top / +1 bottom. */
     var edgeX = 0
     var edgeY = 0
@@ -169,6 +171,7 @@ class HandRig {
         var height = PlaySpace.HOVER_HEIGHT + lift * PlaySpace.MAX_LIFT
         if (overTable) height = maxOf(height, floorY - lowest)
         val target = floatArrayOf(ground.x, height, ground.z)
+        pose.rawTarget = Vec3(target[0], target[1], target[2])
         positionFilter.filterInPlace(target, t)
         val center = Vec3(target[0], target[1], target[2])
 

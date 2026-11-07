@@ -57,6 +57,32 @@ The ⚙ button opens settings: camera, playing hand, movement and lift sensitivi
 recalibrate and reset cube. Debug builds also show a **DBG** button for the developer overlay (camera
 feed with landmark dots, gesture, depth, FPS, tracking confidence) and One Euro smoothing sliders.
 
+## Tuning it to your hand
+
+Debug builds include a tuning recorder (⚙ → Developer: tuning recorder; turn DBG on to see the
+developer section):
+
+- **Guided test (~80 s):** on-screen prompts for holding still, relaxing, pinch/open and fist/open
+  in time with a cue, slow and fast sweeps, lift/lower, and tracing the screen edges. The cues label
+  the data, so the analysis knows what your hand was supposed to be doing.
+- **Record play:** play normally and tap **⚑ Mark issue** right after anything feels off (jittery,
+  missed grab, grabbed by itself, dropped, lost hand, laggy, lift, hand shape). Up to 10 minutes.
+
+When you stop, the app replays the recording through the game code and shows a **summary**: jitter in
+mm, gesture accuracy and delay, the actual pinch/curl measurements per cue against the current
+thresholds, smoothing lag, depth range, edge warnings, dropouts, and the context of each mark.
+**Copy summary** to paste it into a chat, or **Save recording…** to get a `.jsonl.gz` file. The file
+holds hand-landmark numbers only, never camera images.
+
+To replay saved recordings against the current code (for example after changing smoothing or
+gesture thresholds), put them in `recordings/` (git-ignored) and run:
+
+```bash
+./gradlew :app:testDebugUnitTest --tests '*RecordingReplayTest*' -i
+```
+
+The on-device summary and the offline replay use the same `TuningAnalyzer`, so their numbers match.
+
 ## Code map
 
 ```
@@ -82,7 +108,8 @@ app/src/main/java/com/handgame/prototype/
 │   ├── HandMeshBuilder.kt smooth hand rebuilt each frame: tapered fingers, palm, thumb pad, cuff
 │   ├── Materials.kt       toy vinyl material + gradient backdrop (shader source in Kotlin)
 │   └── SceneRenderer.kt   Filament scene, lights, dynamic hand meshes + outline, frame loop
-└── ui/                    Compose overlays: calibration, pause, settings, debug
+├── tuning/                recorder, guided-test script, JSONL format, replay analyzer
+└── ui/                    Compose overlays: calibration, pause, settings, debug, tuning
 ```
 
 ### How the mapping works

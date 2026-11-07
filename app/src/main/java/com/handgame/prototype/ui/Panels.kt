@@ -54,6 +54,8 @@ fun SettingsPanel(
     onRecalibrate: () -> Unit,
     onResetCube: () -> Unit,
     onClose: () -> Unit,
+    canTune: Boolean = false,
+    onStartTuning: (guided: Boolean) -> Unit = {},
 ) {
     Box(
         Modifier.fillMaxSize().background(Color(0x66302840)).clickable(onClick = onClose),
@@ -126,6 +128,19 @@ fun SettingsPanel(
                     onChange(settings.copy(depthMinCutoff = it))
                 }
                 LabeledSlider("Depth beta", settings.depthBeta, 0f..10f) { onChange(settings.copy(depthBeta = it)) }
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(8.dp))
+                Text("Developer: tuning recorder", color = Ink, fontWeight = FontWeight.SemiBold)
+                Hint(
+                    if (canTune) "Records hand-tracking numbers (never images) and summarises how the controls behaved. Share the summary or file in the chat to tune the game to your hand."
+                    else "Finish calibrating first.",
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { onStartTuning(true) }, enabled = canTune) { Text("Guided test (80 s)") }
+                    OutlinedButton(onClick = { onStartTuning(false) }, enabled = canTune) { Text("Record play") }
+                }
+                Spacer(Modifier.height(8.dp))
                 OutlinedButton(onClick = {
                     val d = GameSettings()
                     onChange(
