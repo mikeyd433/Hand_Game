@@ -75,13 +75,23 @@ class SceneRenderer(
     private val cubeEntity: Int
     private val cubeMaterial: MaterialInstance
     private val handMaterial: MaterialInstance
-    private val jointEntities = IntArray(Lm.COUNT)
-    private val boneEntities = IntArray(Lm.BONES.size)
-    private val palmEntity: Int
+    private val cuffMaterial: MaterialInstance
+    private val outlineMaterial: Material
+    private val handMeshes = HandMeshBuilder()
+    private val handBody: DynamicMesh
+    private val handCuff: DynamicMesh
+    private val handOutline: DynamicMesh
+    private val outlinePositions: FloatArray
+    private val outlineNormals: FloatArray
     private var handInScene = false
 
     private val mat = FloatArray(16)
     private var timeSec = 0f
+
+    private companion object {
+        /** Cartoon outline thickness in world units (≈ 4–6 px on a phone at this framing). */
+        const val OUTLINE_WIDTH = 0.0045f
+    }
 
     private class Gpu(val vb: VertexBuffer, val ib: IndexBuffer, val indexCount: Int, val bounds: FloatArray)
 
@@ -160,11 +170,27 @@ class SceneRenderer(
         cubeEntity = addRenderable(cubeMesh, cubeMaterial, castShadows = true, receiveShadows = true)
 
         // Hand.
-        val cylMesh = upload(MeshFactory.cylinder())
-        handMaterial = toyInstance(floatArrayOf(1.0f, 0.93f, 0.86f), roughness = 0.45f)
-        for (i in 0 until Lm.COUNT) jointEntities[i] = addRenderable(sphereMesh, handMaterial, addToScene = false)
-        for (i in Lm.BONES.indices) boneEntities[i] = addRenderable(cylMesh, handMaterial, addToScene = false)
-        palmEntity = addRenderable(sphereMesh, handMaterial, addToScene = false)
+        // Hand: smooth meshes rebuilt every frame, plus an inverted-hull outline.
+        handMaterial = toyInstance(floatArrayOf(1.0f, 0.95f, 0.89f), roughness = 0.5f)
+        cuffMaterial = toyInstance(floatArrayOf(1.0f, 0.55f, 0.66f), roughness = 0.45f)
+        outlineMaterial = Materials.outline(engine)
+        val outlineMi = outlineMaterial.createInstance().also {
+            it.setParameter("color", 0.16f, 0.09f, 0.24f)
+            materialInstances += it
+        }
+        handMeshes.build(game.rig.pose.renderJoints, game.rig.pose.rotation) // fixes the topology
+        val body = handMeshes.body; val cuff = handMeshes.cuff
+        handBody = DynamicMesh(body.vertexCount, body.indices, handMaterial, castShadows = true)
+        handCuff = DynamicMesh(cuff.vertexCount, cuff.indices, cuffMaterial, castShadows = true)
+        val outlineIndices = ShortArray(body.indices.size + cuff.indices.size)
+        body.indices.copyInto(outlineIndices)
+        for (i in cuff.indices.indices) {
+            outlineIndices[body.indices.size + i] = ((cuff.indices[i].toInt() and 0xFFFF) + body.vertexCount).toShort()
+        }
+        val outlineVerts = body.vertexCount + cuff.vertexCount
+        outlinePositions = FloatArray(outlineVerts * 3)
+        outlineNormals = FloatArray(outlineVerts * 3)
+        handOutline = DynamicMesh(outlineVerts, outlineIndices, outlineMi, castShadows = false, withTangents = false)
 
         uiHelper.renderCallback = SurfaceCallback()
         uiHelper.attachTo(surfaceView)
@@ -340,7 +366,7 @@ class SceneRenderer(
         // Hand.
         val visible = game.handVisible
         if (visible != handInScene) {
-            val all = jointEntities + boneEntities + palmEntity
+            val all = intArrayOf(handBody.entity, handCuff.entity, handOutline.entity)
             if (visible) scene.addEntities(all) else scene.removeEntities(all)
             handInScene = visible
         }
@@ -351,23 +377,80 @@ class SceneRenderer(
         handMaterial.setParameter("glow", 0.6f * dim, 0.7f * dim, 1.0f * dim, 1f)
 
         val pose = game.rig.pose
-        val j = pose.renderJoints
-        for (i in 0 until Lm.COUNT) {
-            val r = jointRadius(i)
-            setTransform(jointEntities[i], Mat4.trs(mat, j[i], Quat.IDENTITY, r, r, r))
+        handMeshes.build(pose.renderJoints, pose.rotation)
+        val body = handMeshes.body; val cuff = handMeshes.cuff
+        handBody.update(body.positions, body.normals)
+        handCuff.update(cuff.positions, cuff.normals)
+
+        // Outline = the same surfaces pushed out along their normals, drawn back-faces only.
+        val nb = body.positions.size
+        for (i in 0 until nb) {
+            outlinePositions[i] = body.positions[i] + body.normals[i] * OUTLINE_WIDTH
         }
-        for ((k, bone) in Lm.BONES.withIndex()) {
-            val r = minOf(jointRadius(bone[0]), jointRadius(bone[1])) * if (k >= 16) 1.15f else 1f
-            setTransform(boneEntities[k], Mat4.segment(mat, j[bone[0]], j[bone[1]], r))
+        for (i in cuff.positions.indices) {
+            outlinePositions[nb + i] = cuff.positions[i] + cuff.normals[i] * OUTLINE_WIDTH
         }
-        // Palm: a flattened ellipsoid filling the space between the knuckles and wrist.
-        val width = j[Lm.INDEX_MCP].distance(j[Lm.PINKY_MCP]) * 0.62f + 0.02f
-        val length = j[Lm.WRIST].distance(j[Lm.MIDDLE_MCP]) * 0.55f + 0.01f
-        val center = (j[Lm.WRIST] + j[Lm.INDEX_MCP] + j[Lm.PINKY_MCP] + j[Lm.MIDDLE_MCP]) * 0.25f
-        setTransform(palmEntity, Mat4.trs(mat, center, pose.rotation, width, HandLook.PALM_HALF_THICKNESS, length))
+        handOutline.update(outlinePositions, null)
     }
 
-    private fun jointRadius(i: Int): Float = HandLook.jointRadius(i)
+    /**
+     * A renderable whose vertices are rewritten every frame. Uses three rotating CPU buffers so a
+     * buffer is never overwritten while the GPU thread may still be reading it.
+     */
+    private inner class DynamicMesh(
+        private val vertexCount: Int,
+        indices: ShortArray,
+        mi: MaterialInstance,
+        castShadows: Boolean,
+        private val withTangents: Boolean = true,
+    ) {
+        val entity: Int = EntityManager.get().create()
+        private val vb: VertexBuffer
+        private val posBuffers = Array(3) { floatBuffer(FloatArray(vertexCount * 3)) }
+        private val quatBuffers = Array(3) { floatBuffer(FloatArray(vertexCount * 4)) }
+        private val normalScratch = floatBuffer(FloatArray(vertexCount * 3))
+        private var slot = 0
+
+        init {
+            val b = VertexBuffer.Builder().vertexCount(vertexCount)
+                .attribute(VertexBuffer.VertexAttribute.POSITION, 0, VertexBuffer.AttributeType.FLOAT3, 0, 12)
+            if (withTangents) b.attribute(VertexBuffer.VertexAttribute.TANGENTS, 1, VertexBuffer.AttributeType.FLOAT4, 0, 16)
+            vb = b.bufferCount(if (withTangents) 2 else 1).build(engine)
+            val ib = IndexBuffer.Builder().indexCount(indices.size)
+                .bufferType(IndexBuffer.Builder.IndexType.USHORT).build(engine)
+            ib.setBuffer(engine, shortBuffer(indices))
+            vertexBuffers += vb
+            indexBuffers += ib
+            RenderableManager.Builder(1)
+                .boundingBox(Box(0f, 0f, 0f, 2f, 2f, 2f))
+                .geometry(0, RenderableManager.PrimitiveType.TRIANGLES, vb, ib, 0, indices.size)
+                .material(0, mi)
+                .castShadows(castShadows)
+                .receiveShadows(true)
+                .culling(false)
+                .build(engine, entity)
+            val tm = engine.transformManager
+            if (!tm.hasComponent(entity)) tm.create(entity)
+            entities += entity
+        }
+
+        fun update(positions: FloatArray, normals: FloatArray?) {
+            slot = (slot + 1) % 3
+            val pb = posBuffers[slot]
+            pb.clear(); pb.put(positions, 0, vertexCount * 3); pb.rewind()
+            vb.setBufferAt(engine, 0, pb)
+            if (withTangents && normals != null) {
+                normalScratch.clear(); normalScratch.put(normals, 0, vertexCount * 3); normalScratch.rewind()
+                val so = SurfaceOrientation.Builder().vertexCount(vertexCount).normals(normalScratch).build()
+                val qb = quatBuffers[slot]
+                qb.clear()
+                so.getQuatsAsFloat(qb)
+                so.destroy()
+                qb.rewind()
+                vb.setBufferAt(engine, 1, qb)
+            }
+        }
+    }
 
     fun destroy() {
         pause()
@@ -382,6 +465,7 @@ class SceneRenderer(
         materialInstances.forEach { engine.destroyMaterialInstance(it) }
         engine.destroyMaterial(toyMaterial)
         engine.destroyMaterial(gradientMaterial)
+        engine.destroyMaterial(outlineMaterial)
         vertexBuffers.forEach { engine.destroyVertexBuffer(it) }
         indexBuffers.forEach { engine.destroyIndexBuffer(it) }
         view.colorGrading?.let { engine.destroyColorGrading(it) }

@@ -38,7 +38,30 @@ object Materials {
         }
     """
 
+    /** Flat colour drawn on back faces only: used for inverted-hull cartoon outlines. */
+    private const val OUTLINE_SHADER = """
+        void material(inout MaterialInputs material) {
+            prepareMaterial(material);
+            material.baseColor = vec4(materialParams.color, 1.0);
+        }
+    """
+
     fun init() = MaterialBuilder.init()
+
+    fun outline(engine: Engine): Material {
+        val pkg = MaterialBuilder()
+            .name("outline")
+            .platform(MaterialBuilder.Platform.MOBILE)
+            .targetApi(MaterialBuilder.TargetApi.OPENGL)
+            .optimization(MaterialBuilder.Optimization.PERFORMANCE)
+            .shading(MaterialBuilder.Shading.UNLIT)
+            .uniformParameter(MaterialBuilder.UniformType.FLOAT3, "color")
+            .culling(MaterialBuilder.CullingMode.FRONT)
+            .material(OUTLINE_SHADER)
+            .build()
+        check(pkg.isValid) { "Outline material failed to compile" }
+        return Material.Builder().payload(pkg.buffer, pkg.buffer.remaining()).build(engine)
+    }
 
     fun toy(engine: Engine): Material {
         val pkg = MaterialBuilder()

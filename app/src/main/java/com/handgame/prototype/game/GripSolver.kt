@@ -8,15 +8,24 @@ import kotlin.math.abs
 
 /** Proportions of the rendered cartoon hand, shared by the renderer and the grip solver. */
 object HandLook {
-    const val PALM_HALF_THICKNESS = 0.034f
+    const val PALM_HALF_THICKNESS = 0.030f
+    const val WRIST_HALF_WIDTH = 0.040f
+    const val THUMB_PAD_RADIUS = 0.034f
 
+    /** Finger thickness at each joint: chunky, gently tapering, with soft rounded tips. */
     fun jointRadius(i: Int): Float = when (i) {
         Lm.WRIST -> 0.034f
-        Lm.THUMB_CMC, Lm.THUMB_MCP -> 0.026f
-        Lm.INDEX_MCP, Lm.MIDDLE_MCP, Lm.RING_MCP, Lm.PINKY_MCP -> 0.026f
-        Lm.THUMB_TIP, Lm.INDEX_TIP, Lm.MIDDLE_TIP, Lm.RING_TIP -> 0.024f
-        Lm.PINKY_TIP, Lm.PINKY_DIP, Lm.PINKY_PIP -> 0.019f
-        else -> PlaySpace.FINGER_RADIUS
+        Lm.THUMB_CMC -> 0.029f
+        Lm.THUMB_MCP -> 0.026f
+        Lm.THUMB_IP -> 0.024f
+        Lm.THUMB_TIP -> 0.023f
+        Lm.INDEX_MCP, Lm.MIDDLE_MCP, Lm.RING_MCP -> 0.025f
+        Lm.INDEX_PIP, Lm.MIDDLE_PIP, Lm.RING_PIP -> 0.023f
+        Lm.INDEX_DIP, Lm.MIDDLE_DIP, Lm.RING_DIP -> 0.022f
+        Lm.INDEX_TIP, Lm.MIDDLE_TIP, Lm.RING_TIP -> 0.022f
+        Lm.PINKY_MCP -> 0.021f
+        Lm.PINKY_PIP -> 0.0195f
+        else -> 0.0185f // pinky DIP / tip
     }
 }
 

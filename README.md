@@ -25,7 +25,7 @@ Requirements: JDK 17+, Android SDK with platform 36. Android Studio is optional.
 ```bash
 ./gradlew :app:assembleDebug          # downloads the MediaPipe model on the first build
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-./gradlew :app:testDebugUnitTest      # JVM tests: physics, filters, gestures, calibration, game flow
+./gradlew :app:testDebugUnitTest      # JVM tests; also writes rough hand previews to app/build/hand-preview/
 ```
 
 The hand model (`hand_landmarker.task`, about 7.8 MB) is downloaded by Gradle into
@@ -72,11 +72,13 @@ app/src/main/java/com/handgame/prototype/
 │   ├── ViewRig.kt         scene camera framing + screen→world projection (shared with renderer)
 │   ├── GameController.kt  phases (calibrate/play/pause/resume), grab, soft snap, throw, highlight
 │   └── GameSettings.kt    settings + calibration persistence
+│   └── GripSolver.kt      drawn-hand grip pose + HandLook proportions
 ├── physics/Physics.kt     box rigid body, table + floor contacts, friction, sleeping, velocity drive
 ├── render/
 │   ├── MeshFactory.kt     sphere, cylinder, rounded box, gradient dome
+│   ├── HandMeshBuilder.kt smooth hand rebuilt each frame: tapered fingers, palm, thumb pad, cuff
 │   ├── Materials.kt       toy vinyl material + gradient backdrop (shader source in Kotlin)
-│   └── SceneRenderer.kt   Filament scene, lights, hand from 21 joints + 24 bones, frame loop
+│   └── SceneRenderer.kt   Filament scene, lights, dynamic hand meshes + outline, frame loop
 └── ui/                    Compose overlays: calibration, pause, settings, debug
 ```
 
