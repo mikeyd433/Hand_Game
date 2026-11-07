@@ -101,8 +101,10 @@ class SceneRenderer(
             sampleCount = 4
         }
         view.colorGrading = ColorGrading.Builder()
-            .toneMapper(ToneMapper.Filmic())
-            .saturation(1.05f)
+            // PBR Neutral keeps authored colours faithful instead of washing pastels out.
+            .toneMapper(ToneMapper.PBRNeutralToneMapper())
+            .contrast(1.08f)
+            .saturation(1.1f)
             .build(engine)
         camera.setExposure(1.0f)
 
@@ -120,9 +122,11 @@ class SceneRenderer(
         val dome = upload(
             MeshFactory.gradientDome(
                 radius = 30f,
-                top = floatArrayOf(0.55f, 0.66f, 0.95f),
-                horizon = floatArrayOf(0.98f, 0.80f, 0.86f),
-                bottom = floatArrayOf(0.80f, 0.74f, 0.95f),
+                // Dusk: deep indigo overhead, warm rose at the horizon, plum below. Darker than the
+                // play objects so they stand out.
+                top = floatArrayOf(0.13f, 0.11f, 0.32f),
+                horizon = floatArrayOf(0.78f, 0.36f, 0.50f),
+                bottom = floatArrayOf(0.20f, 0.10f, 0.30f),
             ),
             withTangents = false,
         )
@@ -135,27 +139,28 @@ class SceneRenderer(
                 PlaySpace.TABLE_HALF_X, PlaySpace.TABLE_THICKNESS / 2, PlaySpace.TABLE_HALF_Z, 0.035f,
             ),
         )
-        val tableMi = toyInstance(floatArrayOf(0.74f, 0.70f, 0.93f), roughness = 0.55f)
+        val tableMi = toyInstance(floatArrayOf(0.48f, 0.40f, 0.82f), roughness = 0.6f)
         val table = addRenderable(tableMesh, tableMi, castShadows = false, receiveShadows = true)
         setTransform(table, Mat4.trs(mat, Vec3(0f, -PlaySpace.TABLE_THICKNESS / 2, 0f), Quat.IDENTITY, 1f, 1f, 1f))
 
         // Floating pastel shapes for a dreamy, abstract space.
         val sphereMesh = upload(MeshFactory.sphere())
-        addDecor(sphereMesh, Vec3(-0.9f, 0.35f, -0.9f), 0.16f, floatArrayOf(1.0f, 0.78f, 0.62f))
-        addDecor(sphereMesh, Vec3(0.95f, 0.6f, -1.2f), 0.22f, floatArrayOf(0.62f, 0.86f, 0.80f))
-        addDecor(sphereMesh, Vec3(0.75f, -0.45f, -0.4f), 0.12f, floatArrayOf(0.98f, 0.70f, 0.82f))
-        addDecor(sphereMesh, Vec3(-0.85f, -0.35f, 0.15f), 0.09f, floatArrayOf(0.70f, 0.80f, 1.0f))
+        // Below and beyond the table, so they peek out around its edges without covering play space.
+        addDecor(sphereMesh, Vec3(-0.72f, -0.45f, -1.05f), 0.20f, floatArrayOf(1.0f, 0.48f, 0.40f))
+        addDecor(sphereMesh, Vec3(0.78f, -0.30f, -0.70f), 0.16f, floatArrayOf(1.0f, 0.78f, 0.25f))
+        addDecor(sphereMesh, Vec3(0.70f, -0.55f, 0.75f), 0.18f, floatArrayOf(0.20f, 0.68f, 0.74f))
+        addDecor(sphereMesh, Vec3(-0.68f, -0.35f, 0.40f), 0.12f, floatArrayOf(0.95f, 0.42f, 0.68f))
 
         // Cube.
         val cubeMesh = upload(
             MeshFactory.roundedBox(PlaySpace.CUBE_HALF, PlaySpace.CUBE_HALF, PlaySpace.CUBE_HALF, 0.022f),
         )
-        cubeMaterial = toyInstance(floatArrayOf(0.55f, 0.88f, 0.76f), roughness = 0.35f)
+        cubeMaterial = toyInstance(floatArrayOf(0.12f, 0.76f, 0.62f), roughness = 0.35f)
         cubeEntity = addRenderable(cubeMesh, cubeMaterial, castShadows = true, receiveShadows = true)
 
         // Hand.
         val cylMesh = upload(MeshFactory.cylinder())
-        handMaterial = toyInstance(floatArrayOf(1.0f, 0.90f, 0.82f), roughness = 0.45f)
+        handMaterial = toyInstance(floatArrayOf(1.0f, 0.93f, 0.86f), roughness = 0.45f)
         for (i in 0 until Lm.COUNT) jointEntities[i] = addRenderable(sphereMesh, handMaterial, addToScene = false)
         for (i in Lm.BONES.indices) boneEntities[i] = addRenderable(cylMesh, handMaterial, addToScene = false)
         palmEntity = addRenderable(sphereMesh, handMaterial, addToScene = false)
@@ -173,12 +178,12 @@ class SceneRenderer(
         val sun = EntityManager.get().create().also { entities += it }
         LightManager.Builder(LightManager.Type.DIRECTIONAL)
             .color(1.0f, 0.96f, 0.92f)
-            .intensity(3.0f)
-            .direction(0.25f, -1.0f, -0.35f)
+            .intensity(4.5f)
+            .direction(0.35f, -1.0f, -0.45f)
             .castShadows(true)
             .shadowOptions(LightManager.ShadowOptions().apply {
                 mapSize = 2048
-                shadowFar = 6f
+                shadowFar = 8f
                 stable = true
             })
             .build(engine, sun)
@@ -186,10 +191,11 @@ class SceneRenderer(
 
         // Ambient: a soft lavender/peach sky approximated by low-order spherical harmonics.
         val sh = floatArrayOf(
-            0.80f, 0.78f, 0.88f, // L00: overall ambient tint
-            0.10f, 0.12f, 0.18f, // L1-1: brighter from above
+            // Kept low relative to the sun so shading and shadows have contrast.
+            0.42f, 0.38f, 0.52f, // L00: cool lavender ambient
+            0.08f, 0.07f, 0.12f, // L1-1: a little brighter from above
             0.00f, 0.00f, 0.00f, // L10
-            0.04f, 0.02f, 0.00f, // L11
+            0.06f, 0.03f, 0.00f, // L11: warm bounce from the side
         )
         val ibl = IndirectLight.Builder().irradiance(2, sh).intensity(1.0f).build(engine)
         scene.indirectLight = ibl
@@ -340,7 +346,7 @@ class SceneRenderer(
         if (!visible) return
 
         // Slightly dim the hand during the resume countdown, so it reads as "not live yet".
-        val dim = if (game.phase == Phase.RESUMING || game.phase == Phase.CALIBRATING) 0.12f else 0f
+        val dim = if (game.phase == Phase.RESUMING || game.phase == Phase.CALIBRATING) 0.10f else 0f
         handMaterial.setParameter("glow", 0.6f * dim, 0.7f * dim, 1.0f * dim, 1f)
 
         val pose = game.rig.pose
@@ -396,10 +402,12 @@ class SceneRenderer(
 
     private fun updateViewport(width: Int, height: Int) {
         view.viewport = Viewport(0, 0, width, height)
-        val aspect = width.toDouble() / height.toDouble()
-        // Fit the table's width in portrait; angled 3/4 tabletop view.
-        camera.setProjection(52.0, aspect, 0.05, 60.0, Camera.Fov.HORIZONTAL)
-        camera.lookAt(0.0, 1.55, 1.15, 0.0, 0.04, 0.02, 0.0, 1.0, 0.0)
+        // The game owns the camera framing so hand mapping and rendering always agree.
+        val rig = game.view
+        rig.fit(width.toFloat() / height.toFloat())
+        camera.setProjection(rig.verticalFovDeg, rig.aspect.toDouble(), 0.05, 60.0, Camera.Fov.VERTICAL)
+        val e = rig.eye; val t = rig.target
+        camera.lookAt(e.x.toDouble(), e.y.toDouble(), e.z.toDouble(), t.x.toDouble(), t.y.toDouble(), t.z.toDouble(), 0.0, 1.0, 0.0)
     }
 
     private inner class SurfaceCallback : UiHelper.RendererCallback {

@@ -38,9 +38,15 @@ The hand model (`hand_landmarker.task`, about 7.8 MB) is downloaded by Gradle in
    - *Back camera:* reach behind the phone, palm facing away from you, fingers up.
 
    Then sweep your hand around the area you want to use, or tap **Skip**.
-2. **Move** your hand to move the on-screen hand over the table. The cube glows when it is in reach.
+2. **Move** your hand to move the on-screen hand. Your comfortable range (from calibration) covers
+   the whole screen. The cube glows when it is in reach.
 3. **Grab** with a **pinch** (thumb and index finger together) or a **fist**.
-4. **Lift** by bringing your hand closer to the camera. Move it back to lower.
+4. **Lift** by pulling your hand back. The screen is a window looking down at the table, so pushing
+   "into" it goes down:
+   - *Front camera:* move your hand toward the screen to lower, pull it back toward yourself to lift.
+   - *Back camera:* reach farther behind the phone to lower, bring your hand back toward it to lift.
+
+   **Reverse lift direction** in settings flips this.
 5. **Throw** by opening your hand while moving. The cube flies off with your hand's speed.
 6. **Pause:** take your hand out of view and the game pauses after 0.4 s. Anything you're holding
    is set down. Show your hand again to resume after a short countdown.
@@ -63,6 +69,7 @@ app/src/main/java/com/handgame/prototype/
 │   └── Calibration.kt     open-hand baseline + movement-range sweep
 ├── game/
 │   ├── HandRig.kt         landmarks → smoothed world pose (X/Z from position, Y from apparent size)
+│   ├── ViewRig.kt         scene camera framing + screen→world projection (shared with renderer)
 │   ├── GameController.kt  phases (calibrate/play/pause/resume), grab, soft snap, throw, highlight
 │   └── GameSettings.kt    settings + calibration persistence
 ├── physics/Physics.kt     box rigid body, table + floor contacts, friction, sleeping, velocity drive
@@ -79,9 +86,12 @@ app/src/main/java/com/handgame/prototype/
   with a *proper* rotation for each camera, so a left hand is never turned into a right hand.
 - **Handedness:** MediaPipe labels assume a mirrored selfie image, so the label is inverted for our
   images and then majority-voted over about 20 frames. You can override it in settings.
+- **Screen-wide reach:** the calibrated movement range maps to screen coordinates (nearly
+  edge to edge). `ViewRig` then casts a ray from the scene camera to find the matching point at hover
+  height. The camera is refit to each screen's shape so the portrait table fills the display.
 - **Depth:** apparent hand size (palm length and knuckle width) divided by the calibrated size.
-  It has a small dead zone, is clamped, and gets its own heavier One Euro filter. It only controls
-  lifting.
+  Moving into the screen goes down (bigger for the front camera, smaller for the back). It has a
+  small dead zone, is clamped, and gets its own heavier One Euro filter. It only controls lifting.
 - **Grabbing:** the hand closing (OPEN → PINCH/FIST) grabs the cube if it is within 6 cm of the
   pinch point, fist point or palm, or was within the last 0.3 s. The held cube follows through a
   velocity drive, so it still collides with the table. Releasing uses the hand's average

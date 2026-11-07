@@ -13,6 +13,8 @@ data class GameSettings(
     val sensitivity: Float = 1.0f,
     /** >1 = less change in hand distance needed to lift. */
     val depthSensitivity: Float = 1.0f,
+    /** Flips which way moving toward/away from the camera lifts. */
+    val invertLift: Boolean = false,
     val vibration: Boolean = true,
     // One Euro filter parameters (position in world units, depth in 0..1 lift units).
     val posMinCutoff: Float = 1.2f,
@@ -37,6 +39,7 @@ class SettingsStore(context: Context) {
             }.getOrDefault(d.handedness),
             sensitivity = prefs.getFloat("sensitivity", d.sensitivity),
             depthSensitivity = prefs.getFloat("depthSensitivity", d.depthSensitivity),
+            invertLift = prefs.getBoolean("invertLift", d.invertLift),
             vibration = prefs.getBoolean("vibration", d.vibration),
             posMinCutoff = prefs.getFloat("posMinCutoff", d.posMinCutoff),
             posBeta = prefs.getFloat("posBeta", d.posBeta),
@@ -54,6 +57,7 @@ class SettingsStore(context: Context) {
             .putString("handedness", s.handedness.name)
             .putFloat("sensitivity", s.sensitivity)
             .putFloat("depthSensitivity", s.depthSensitivity)
+            .putBoolean("invertLift", s.invertLift)
             .putBoolean("vibration", s.vibration)
             .putFloat("posMinCutoff", s.posMinCutoff)
             .putFloat("posBeta", s.posBeta)

@@ -29,7 +29,7 @@ class HandRigTest {
         var t = 0.0
         repeat(300) {
             t += 1 / 30.0
-            rig.update(noisy(base, rnd), true, 480, 640, GameController.DEFAULT_CALIBRATION, settings, true, t)
+            rig.update(noisy(base, rnd), true, 480, 640, GameController.DEFAULT_CALIBRATION, settings, true, com.handgame.prototype.game.ViewRig(), t)
             palms += rig.pose.palmCenter; tips += rig.pose.joints[Lm.INDEX_TIP]; lifts += rig.pose.lift
         }
         fun spread(v: List<Vec3>) = v.takeLast(150).let { l ->

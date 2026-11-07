@@ -70,6 +70,8 @@ class GameController(
         if (initialCalibration == null) CalibrationSession() else null
 
     val rig = HandRig().also { it.applySettings(initialSettings) }
+    /** Scene camera, shared with the renderer (which refits it when the screen size changes). */
+    val view = ViewRig()
     val gestures = GestureDetector()
     private val handednessVoter = HandednessVoter()
 
@@ -197,7 +199,7 @@ class GameController(
         val t = sample.timestampNs / 1e9
         rig.update(
             hand, sample.frontCamera, sample.imageWidth, sample.imageHeight,
-            calibration, settings, handedness != Handedness.LEFT, t,
+            calibration, settings, handedness != Handedness.LEFT, view, t,
         )
         gestures.update(rig.gestureShape)
 

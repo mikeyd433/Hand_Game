@@ -49,14 +49,14 @@ class GameControllerTest {
         assertTrue("should be holding", game.holding)
         assertEquals(HapticEvent.GRAB, haptics.last())
 
-        // Bring the hand closer to the camera → lift.
-        play(1.0f) { SyntheticHand.hand(Gesture.PINCH, u = u, scale = 3.6f) }
+        // Front camera: pull the hand back from the screen (it looks smaller) → lift.
+        play(1.0f) { SyntheticHand.hand(Gesture.PINCH, u = u, scale = 1.6f) }
         assertTrue("cube lifted (y=${game.cube.position.y})", game.cube.position.y > 0.2f)
 
         // Swing quickly to the side and let go → throw.
         var uu = u
-        play(0.25f) { uu += 0.02f; SyntheticHand.hand(Gesture.PINCH, u = uu, scale = 3.6f) }
-        play(0.1f) { uu += 0.02f; SyntheticHand.hand(Gesture.OPEN, u = uu, scale = 3.6f) }
+        play(0.25f) { uu += 0.02f; SyntheticHand.hand(Gesture.PINCH, u = uu, scale = 1.6f) }
+        play(0.1f) { uu += 0.02f; SyntheticHand.hand(Gesture.OPEN, u = uu, scale = 1.6f) }
         assertFalse(game.holding)
         val vx = game.cube.linearVelocity.x
         // u increasing in the un-mirrored image = moving left on screen for the front camera.

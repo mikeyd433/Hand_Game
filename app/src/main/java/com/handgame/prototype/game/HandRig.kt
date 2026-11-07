@@ -11,8 +11,9 @@ import com.handgame.prototype.tracking.RawHand
 
 /** Dimensions of the play space in world units (≈ meters). The table top is at y = 0. */
 object PlaySpace {
-    const val TABLE_HALF_X = 0.60f
-    const val TABLE_HALF_Z = 0.40f
+    // Portrait-shaped table so it fills a phone screen held upright.
+    const val TABLE_HALF_X = 0.50f
+    const val TABLE_HALF_Z = 0.90f
     const val TABLE_THICKNESS = 0.08f
     const val CUBE_HALF = 0.07f
 
@@ -43,9 +44,10 @@ class HandPose {
 
 /**
  * Turns raw MediaPipe hands into a smoothed [HandPose] in world space:
- *  - X/Z position: mirrored palm-center image position mapped through the calibrated range
- *    onto the table.
+ *  - X/Z position: mirrored palm-center image position, mapped through the calibrated range onto
+ *    the whole screen, then projected onto the play space with the scene camera ([ViewRig]).
  *  - Height (light depth): apparent hand size vs. calibrated size, clamped and heavily smoothed.
+ *    Pushing the hand "into" the screen lowers it toward the table; pulling back lifts.
  *  - Shape: MediaPipe's metric 3D landmarks rotated into game axes and scaled to cartoon size.
  * All three are smoothed with One Euro filters whose parameters come from [GameSettings].
  */
@@ -83,6 +85,7 @@ class HandRig {
         cal: Calibration,
         settings: GameSettings,
         rightHand: Boolean,
+        view: ViewRig,
         t: Double,
     ) {
         // --- Shape -------------------------------------------------------------------------
@@ -98,20 +101,35 @@ class HandRig {
         // --- Depth → lift ------------------------------------------------------------------
         val size = HandMeasure.apparentSize(hand, imageWidth, imageHeight)
         val ratio = size / cal.baseSize.coerceAtLeast(1e-3f)
-        // Closer to the camera (bigger) lifts. A small dead zone keeps the cube on the table at rest.
+        // The screen is a window looking down at the table, so moving the hand deeper into the
+        // scene goes down:
+        //  - Front camera: the hand faces the screen. Moving toward the screen (hand looks bigger)
+        //    goes down, pulling back toward yourself (smaller) lifts.
+        //  - Back camera: reaching farther behind the phone (smaller) goes down, bringing the
+        //    hand back toward the phone (bigger) lifts.
+        // Both use distance ratios (size or 1/size), with a small dead zone so the cube rests at
+        // the calibrated distance.
         val liftRange = 0.45f / settings.depthSensitivity.coerceAtLeast(0.1f)
-        val rawLift = ((ratio - 1.05f) / liftRange).coerceIn(0f, 1f)
+        val closerLifts = !frontCamera xor settings.invertLift
+        val distanceRatio = if (closerLifts) ratio else 1f / ratio.coerceAtLeast(1e-3f)
+        val rawLift = ((distanceRatio - 1.05f) / liftRange).coerceIn(0f, 1f)
         val lift = depthFilter.filter(rawLift, t).coerceIn(0f, 1f)
 
         // --- Position ----------------------------------------------------------------------
         val (u, v) = HandMeasure.palmCenterUv(hand, frontCamera)
         val sens = settings.sensitivity.coerceAtLeast(0.1f)
-        val nx = ((u - cal.centerU) / cal.rangeU * sens).coerceIn(-1.2f, 1.2f)
-        val nz = ((v - cal.centerV) / cal.rangeV * sens).coerceIn(-1.2f, 1.2f)
+        val nx = ((u - cal.centerU) / cal.rangeU * sens).coerceIn(-1f, 1f)
+        val ny = ((v - cal.centerV) / cal.rangeV * sens).coerceIn(-1f, 1f)
+        // The comfortable range covers the whole screen: map it to screen coordinates, then find
+        // the matching spot at hover height. Lifting then goes straight up from there.
+        val ndcX = nx * SCREEN_REACH_X
+        val ndcY = if (ny < 0f) -ny * SCREEN_REACH_TOP else -ny * SCREEN_REACH_BOTTOM
+        val ground = view.screenToPlane(ndcX, ndcY, PlaySpace.HOVER_HEIGHT)
+            ?: Vec3(nx * PlaySpace.TABLE_HALF_X, PlaySpace.HOVER_HEIGHT, ny * PlaySpace.TABLE_HALF_Z)
         val target = floatArrayOf(
-            nx * PlaySpace.TABLE_HALF_X,
+            ground.x,
             PlaySpace.HOVER_HEIGHT + lift * PlaySpace.MAX_LIFT,
-            nz * PlaySpace.TABLE_HALF_Z,
+            ground.z,
         )
         positionFilter.filterInPlace(target, t)
         var center = Vec3(target[0], target[1], target[2])
@@ -142,6 +160,14 @@ class HandRig {
         val palmDown = pose.rotation.rotate(Vec3(0f, -1f, 0f))
         val toFingers = (joints[Lm.MIDDLE_MCP] - center) * 0.5f
         pose.fistPoint = center + toFingers + palmDown * 0.05f
+    }
+
+    private companion object {
+        // How far the palm center reaches toward each screen edge (NDC). Slightly inside the edge
+        // so the whole hand stays visible; the top leaves room for the fingers.
+        const val SCREEN_REACH_X = 0.92f
+        const val SCREEN_REACH_TOP = 0.78f
+        const val SCREEN_REACH_BOTTOM = 0.92f
     }
 
     /**

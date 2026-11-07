@@ -90,7 +90,15 @@ fun SettingsPanel(
             LabeledSlider("Lift sensitivity", settings.depthSensitivity, 0.4f..2.5f) {
                 onChange(settings.copy(depthSensitivity = it))
             }
-            Hint("Higher: move your hand toward the camera less to lift things.")
+            Hint("Higher: a smaller change in hand distance lifts things.")
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Reverse lift direction", color = Ink, modifier = Modifier.weight(1f))
+                Switch(checked = settings.invertLift, onCheckedChange = { onChange(settings.copy(invertLift = it)) })
+            }
+            Hint(
+                if (settings.invertLift == settings.frontCamera) "Now: move your hand toward the camera to lift."
+                else "Now: move your hand away from the camera to lift.",
+            )
 
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Vibrate on grab", color = Ink, modifier = Modifier.weight(1f))
