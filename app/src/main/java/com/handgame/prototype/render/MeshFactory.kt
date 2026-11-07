@@ -161,6 +161,33 @@ object MeshFactory {
         return MeshData(pos, nrm, idx, colors)
     }
 
+    /**
+     * Flat ring (unit outer radius) lying on the XZ plane, with vertex colors fading from a bright
+     * rim to transparent-looking softer color inside. Used for target zones on the table.
+     */
+    fun ring(inner: Float = 0.78f, segments: Int = 48, color: FloatArray): MeshData {
+        val pos = ArrayList<Float>(); val nrm = ArrayList<Float>(); val col = ArrayList<Float>(); val idx = ArrayList<Short>()
+        val radii = floatArrayOf(inner, (inner + 1f) / 2f, 1f)
+        val shade = floatArrayOf(0.75f, 1.0f, 0.75f)
+        for (s in 0 until segments) {
+            val a = 2 * PI * s / segments
+            for ((k, r) in radii.withIndex()) {
+                pos += (cos(a) * r).toFloat(); pos += 0f; pos += (sin(a) * r).toFloat()
+                nrm += 0f; nrm += 1f; nrm += 0f
+                col += color[0] * shade[k]; col += color[1] * shade[k]; col += color[2] * shade[k]; col += 1f
+            }
+        }
+        for (s in 0 until segments) {
+            val n = (s + 1) % segments
+            for (k in 0 until 2) {
+                val a = s * 3 + k; val b = n * 3 + k; val c = n * 3 + k + 1; val d = s * 3 + k + 1
+                idx += a.toShort(); idx += d.toShort(); idx += c.toShort()
+                idx += a.toShort(); idx += c.toShort(); idx += b.toShort()
+            }
+        }
+        return MeshData(pos.toFloatArray(), nrm.toFloatArray(), idx.toShortArray(), col.toFloatArray())
+    }
+
     private fun smooth(t: Float): Float { val x = t.coerceIn(0f, 1f); return x * x * (3 - 2 * x) }
     private fun mix(a: FloatArray, b: FloatArray, t: Float) =
         floatArrayOf(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t)

@@ -20,6 +20,12 @@ enum class Phase { CALIBRATING, PLAYING, PAUSED, RESUMING }
 
 enum class HapticEvent { GRAB, RELEASE }
 
+/** A glowing ring on the table that guided tasks ask the player to put the cube in. */
+data class Target(val center: Vec3, val radius: Float)
+
+/** Something the cube did, for tuning recordings. */
+data class GameEvent(val kind: String, val gesture: String, val cube: Vec3, val speed: Float)
+
 /** Everything the debug overlay shows. */
 data class DebugInfo(
     val gesture: Gesture,
@@ -90,6 +96,28 @@ class GameController(
 
     val world = PhysicsWorld(PlaySpace.TABLE_HALF_X, PlaySpace.TABLE_HALF_Z)
     val cube = RigidBox(Vec3(PlaySpace.CUBE_HALF, PlaySpace.CUBE_HALF, PlaySpace.CUBE_HALF), mass = 0.4f)
+
+    /** Optional target ring shown on the table (guided tasks). */
+    var target: Target? = null
+
+    private val events = ArrayList<GameEvent>()
+
+    /** Returns and clears the events since the last call. */
+    fun drainEvents(): List<GameEvent> = ArrayList(events).also { events.clear() }
+
+    /** The gesture the cube is currently held with (OPEN when not holding). */
+    val heldWith: Gesture get() = if (holding) grabGesture else Gesture.OPEN
+
+    /** Puts the cube at [pos] (resting, upright), letting go of it if held. */
+    fun placeCube(pos: Vec3) {
+        releaseHeld(throwIt = false)
+        cube.position = pos
+        cube.orientation = Quat.IDENTITY
+        cube.linearVelocity = Vec3.ZERO
+        cube.angularVelocity = Vec3.ZERO
+        cube.wake()
+        outOfPlayTimer = 0f
+    }
 
     /** True while the hand should be drawn. */
     var handVisible = false
@@ -415,14 +443,18 @@ class GameController(
         val aligned = (Quat.fromTo(cube.orientation.rotate(gripAxis), squeeze) * cube.orientation).normalized()
         heldRelRotation = (inv * cube.orientation).normalized()
         heldRelTarget = (inv * aligned).normalized()
+        events += GameEvent("grab", g.name, cube.position, 0f)
 
         // Settle position: centered between thumb and index, nudged away from the palm (pinch), or
         // resting flat under the palm and slightly toward the fingers (fist).
         heldTargetOffset = if (g == Gesture.FIST) {
-            Vec3(0f, -(HandLook.PALM_HALF_THICKNESS + PlaySpace.CUBE_HALF + 0.004f), -0.03f * HandLook.scale)
+            // Under the palm and tucked back toward the wrist, so the fingers curl down in front of
+            // it (like gripping a block from above) instead of into it.
+            Vec3(0f, -(HandLook.PALM_HALF_THICKNESS + PlaySpace.CUBE_HALF + 0.004f), 0.035f * HandLook.scale)
         } else {
+            // Out beyond the fingertips, so the index finger's bones clear the cube.
             val out = (p.pinchPoint - p.palmCenter).normalized()
-            inv.rotate(out * 0.015f)
+            inv.rotate(out * (PlaySpace.CUBE_HALF * 0.45f))
         }
         onHaptic(HapticEvent.GRAB)
     }
@@ -459,6 +491,29 @@ class GameController(
             }
             GripSolver.solve(relaxed, p.renderJoints, cube, Gesture.OPEN, gripAxis, 0f, Vec3.ZERO, Vec3.ZERO)
         }
+        resolveCollisions(dt)
+    }
+
+    /** Overlap stats of the drawn hand this frame (before/after resolving), for tuning. */
+    val collisionStats = HandCollision.Stats()
+    private val collisionScratch = Array(Lm.COUNT) { Vec3.ZERO }
+    private val collisionOffsets = Array(Lm.COUNT) { Vec3.ZERO }
+
+    /**
+     * Keeps the drawn hand from passing through itself, the table or the cube. Corrections are
+     * eased in over a few frames so a finger never visibly pops.
+     */
+    private fun resolveCollisions(dt: Float) {
+        val p = rig.pose
+        for (i in 0 until Lm.COUNT) collisionScratch[i] = p.renderJoints[i]
+        val overTable = abs(p.palmCenter.x) < PlaySpace.TABLE_HALF_X + 0.05f && abs(p.palmCenter.z) < PlaySpace.TABLE_HALF_Z + 0.05f
+        HandCollision.solve(collisionScratch, p.rotation, cube, if (overTable) 0f else null, collisionStats, holdingCube = holding)
+        val blend = (COLLISION_EASE * dt).coerceIn(0f, 1f)
+        for (i in 0 until Lm.COUNT) {
+            val target = collisionScratch[i] - p.renderJoints[i]
+            collisionOffsets[i] = Vec3.lerp(collisionOffsets[i], target, blend)
+            p.renderJoints[i] = p.renderJoints[i] + collisionOffsets[i]
+        }
     }
 
     private val gripOffsets = Array(Lm.COUNT) { Vec3.ZERO }
@@ -478,6 +533,7 @@ class GameController(
             cube.linearVelocity = Vec3.ZERO
             cube.angularVelocity = Vec3.ZERO
         }
+        events += GameEvent(if (throwIt) "release" else "drop_forced", grabGesture.name, cube.position, cube.linearVelocity.length())
         onHaptic(HapticEvent.RELEASE)
     }
 
@@ -517,6 +573,7 @@ class GameController(
 
     fun respawnCube() {
         releaseHeld(throwIt = false)
+        events += GameEvent("respawn", "", cube.position, 0f)
         cube.position = Vec3(0f, 0.35f, 0f)
         cube.orientation = Quat.fromAxisAngle(Vec3(0.3f, 1f, 0.2f), 0.5f)
         cube.linearVelocity = Vec3.ZERO
@@ -575,6 +632,8 @@ class GameController(
         const val HAND_LOSS_GRACE = 0.4
         const val RESUME_SECONDS = 1.2f
         const val GRAB_RANGE = 0.06f
+        /** How quickly collision corrections ease in (per second; ~60 ms to settle). */
+        const val COLLISION_EASE = 30f
         /** How far above the cube a grab still reaches (see [overheadDistance]). */
         const val OVERHEAD_REACH = 0.20f
         const val THROW_GAIN = 1.15f

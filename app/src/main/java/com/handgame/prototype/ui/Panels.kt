@@ -137,7 +137,7 @@ fun SettingsPanel(
                     else "Finish calibrating first.",
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { onStartTuning(true) }, enabled = canTune) { Text("Guided test (80 s)") }
+                    Button(onClick = { onStartTuning(true) }, enabled = canTune) { Text("Guided test (~2½ min)") }
                     OutlinedButton(onClick = { onStartTuning(false) }, enabled = canTune) { Text("Record play") }
                 }
                 Spacer(Modifier.height(8.dp))

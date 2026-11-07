@@ -142,6 +142,7 @@ class HandRig {
         angleFilter.filterInPlace(angles, t)
         HandSkeleton.pose(angles, rightHand, HandLook.palmLength, skeleton)
         assistPinch(skeleton)
+        guideFistThumb(skeleton)
 
         // --- Depth → lift ------------------------------------------------------------------
         val size = HandMeasure.apparentSize(hand, imageWidth, imageHeight)
@@ -266,6 +267,32 @@ class HandRig {
     }
 
     /**
+     * MediaPipe's thumb estimate in a closed fist is unreliable and tends to put the drawn thumb
+     * inside the curled index finger. As the real hand closes into a fist, guide the thumb to rest
+     * across the outside (palm side) of the curled index and middle fingers, where a real thumb sits.
+     * Works in the palm's local frame (y = back of the hand).
+     */
+    private fun guideFistThumb(local: Array<Vec3>) {
+        var maxCurl = 0f
+        for ((mcp, tip) in listOf(Lm.INDEX_MCP to Lm.INDEX_TIP, Lm.MIDDLE_MCP to Lm.MIDDLE_TIP, Lm.RING_MCP to Lm.RING_TIP, Lm.PINKY_MCP to Lm.PINKY_TIP)) {
+            val r = gestureShape[tip].distance(gestureShape[Lm.WRIST]) / gestureShape[mcp].distance(gestureShape[Lm.WRIST]).coerceAtLeast(1e-4f)
+            maxCurl = maxOf(maxCurl, r)
+        }
+        val w = ((FIST_GUIDE_START - maxCurl) / (FIST_GUIDE_START - FIST_GUIDE_FULL)).coerceIn(0f, 1f)
+        if (w <= 0f) return
+        // Rest point: on the palm side of the index finger's middle bone, leaning toward the middle finger.
+        val indexMid = Vec3.lerp(local[Lm.INDEX_PIP], local[Lm.INDEX_DIP], 0.5f)
+        val middleMid = Vec3.lerp(local[Lm.MIDDLE_PIP], local[Lm.MIDDLE_DIP], 0.5f)
+        val across = Vec3.lerp(indexMid, middleMid, 0.35f)
+        val clearance = (HandLook.jointRadius(Lm.INDEX_DIP) + HandLook.jointRadius(Lm.THUMB_TIP)) * 0.95f
+        val tipTarget = across + Vec3(0f, -clearance, 0f)
+        GripSolver.bendChain(local, GripSolver.THUMB_CHAIN, tipTarget, w)
+        // Keep the thumb's knuckle out of the index finger's way, on the palm side as well.
+        val ipTarget = Vec3.lerp(local[Lm.THUMB_MCP], tipTarget, 0.55f) + Vec3(0f, -clearance * 0.5f, 0f)
+        local[Lm.THUMB_IP] = Vec3.lerp(local[Lm.THUMB_IP], ipTarget, w * 0.7f)
+    }
+
+    /**
      * The skeleton has cartoon proportions, so a real pinch doesn't always bring its thumb and
      * index tips together. As the real fingers close, draw the tips together so pinches read.
      */
@@ -290,6 +317,9 @@ class HandRig {
          */
         const val LIFT_DEAD_ZONE = 1.15f
         const val MIN_RANGE = 0.07f
+        /** Fist thumb guidance starts as the fingers curl below this (open ≈ 1.95) and is full at FIST_GUIDE_FULL. */
+        const val FIST_GUIDE_START = 1.55f
+        const val FIST_GUIDE_FULL = 1.15f
         const val EDGE_MARGIN = 0f
         /**
          * Share of the measured open-hand reach that must stay inside the frame. Below 1 because

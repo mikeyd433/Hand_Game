@@ -74,6 +74,8 @@ class SceneRenderer(
     // Scene objects.
     private val cubeEntity: Int
     private val cubeMaterial: MaterialInstance
+    private val ringEntity: Int
+    private var ringInScene = false
     private val handMaterial: MaterialInstance
     private val cuffMaterial: MaterialInstance
     private val outlineMaterial: Material
@@ -170,6 +172,11 @@ class SceneRenderer(
         cubeEntity = addRenderable(cubeMesh, cubeMaterial, castShadows = true, receiveShadows = true)
 
         // Hand.
+        // Target ring for guided tasks (shown only when the game sets a target).
+        val ringMesh = upload(MeshFactory.ring(color = floatArrayOf(1.0f, 0.85f, 0.35f)), withTangents = false)
+        val ringMi = gradientMaterial.createInstance().also { materialInstances += it }
+        ringEntity = addRenderable(ringMesh, ringMi, castShadows = false, receiveShadows = false, addToScene = false)
+
         // Hand: smooth meshes rebuilt every frame, plus an inverted-hull outline.
         handMaterial = toyInstance(floatArrayOf(1.0f, 0.95f, 0.89f), roughness = 0.5f)
         cuffMaterial = toyInstance(floatArrayOf(1.0f, 0.55f, 0.66f), roughness = 0.45f)
@@ -362,6 +369,17 @@ class SceneRenderer(
         cubeMaterial.setParameter("glow", 1.0f * h * pulse, 0.85f * h * pulse, 0.45f * h * pulse, 0.6f)
         val s = 1f + 0.04f * h
         setTransform(cubeEntity, Mat4.trs(mat, cube.position, cube.orientation, s, s, s))
+
+        // Target ring.
+        val target = game.target
+        if ((target != null) != ringInScene) {
+            if (target != null) scene.addEntity(ringEntity) else scene.removeEntity(ringEntity)
+            ringInScene = target != null
+        }
+        if (target != null) {
+            val r = target.radius * (1f + 0.04f * sin(timeSec * 3f))
+            setTransform(ringEntity, Mat4.trs(mat, Vec3(target.center.x, 0.003f, target.center.z), Quat.IDENTITY, r, 1f, r))
+        }
 
         // Hand.
         val visible = game.handVisible

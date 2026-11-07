@@ -168,6 +168,7 @@ class MainActivity : ComponentActivity() {
                     stepCount = recorder.guidedSteps?.size ?: 0,
                     elapsed = recorder.time.toFloat(),
                     marks = markCount,
+                    objectiveDone = recorder.objectiveDone,
                 )
             }
         }
@@ -188,7 +189,7 @@ class MainActivity : ComponentActivity() {
 
     private fun finishTuning() {
         if (!recorder.active) return
-        val rec = recorder.stop()
+        val rec = recorder.stop(game)
         lastRecording = rec
         val summary = runCatching { TuningAnalyzer().analyze(rec).text }
             .getOrElse { "Analysis failed: ${it.message}" }

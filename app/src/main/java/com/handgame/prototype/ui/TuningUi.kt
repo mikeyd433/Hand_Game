@@ -48,6 +48,7 @@ data class TuningUi(
     val stepCount: Int = 0,
     val elapsed: Float = 0f,
     val marks: Int = 0,
+    val objectiveDone: Boolean = false,
     val summary: String = "",
 )
 
@@ -89,7 +90,7 @@ private fun GuidedCard(s: TuningUi, onStop: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text("Tuning test · step ${s.stepNumber} of ${s.stepCount}", color = Ink.copy(alpha = 0.6f), fontSize = 12.sp)
-            Text(s.stepTitle, color = Ink, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text(if (s.objectiveDone) "✓ ${s.stepTitle}" else s.stepTitle, color = if (s.objectiveDone) Color(0xFF2E9E6E) else Ink, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
             Text(s.prompt, color = Ink, textAlign = TextAlign.Center)
             if (s.cue.isNotEmpty() && s.stepTitle in listOf("Pinch", "Fist", "Lift")) {

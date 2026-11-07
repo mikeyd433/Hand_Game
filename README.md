@@ -67,9 +67,11 @@ feed with landmark dots, gesture, depth, FPS, tracking confidence) and One Euro 
 Debug builds include a tuning recorder (⚙ → Developer: tuning recorder; turn DBG on to see the
 developer section):
 
-- **Guided test (~80 s):** on-screen prompts for holding still, relaxing, pinch/open and fist/open
-  in time with a cue, slow and fast sweeps, lift/lower, and tracing the screen edges. The cues label
-  the data, so the analysis knows what your hand was supposed to be doing.
+- **Guided test (~2½ min):** on-screen prompts for holding still, relaxing, pinch/open and fist/open
+  in time with a cue, slow and fast sweeps, lift/lower, and tracing the screen edges. Then five
+  object tasks that end when done: pinch-grab the cube, lift and hold it steady, set it in a glowing
+  ring, fist-carry it to another ring, and throw it off the table. The cues label the data, so the
+  analysis knows what your hand was supposed to be doing.
 - **Record play:** play normally and tap **⚑ Mark issue** right after anything feels off (jittery,
   missed grab, grabbed by itself, dropped, lost hand, laggy, lift, hand shape). Up to 10 minutes.
 
@@ -103,6 +105,7 @@ app/src/main/java/com/handgame/prototype/
 ├── game/
 │   ├── HandRig.kt         landmarks → smoothed world pose (X/Z from position, Y from apparent size)
 │   ├── HandSkeleton.kt    rigid hand: angles from landmarks → fixed-length skeleton
+│   ├── HandCollision.kt   drawn-hand overlap detection/resolution (fingers, palm, table, cube)
 │   ├── ViewRig.kt         scene camera framing + screen→world projection (shared with renderer)
 │   ├── GameController.kt  phases (calibrate/play/pause/resume), grab, soft snap, throw, highlight
 │   └── GameSettings.kt    settings + calibration persistence
@@ -121,6 +124,12 @@ app/src/main/java/com/handgame/prototype/
 - **Mirroring:** frames go to MediaPipe upright and un-mirrored. For the front camera, the screen
   position is mirrored (`u → 1-u`) so moving right moves the hand right. The 3D shape is rotated
   with a *proper* rotation for each camera, so a left hand is never turned into a right hand.
+- **No overlaps in the drawn hand:** after the grip pass, `HandCollision` treats every finger bone
+  as a capsule. It pushes apart fingers that pass through each other, fingertips sinking into the
+  palm, joints in the table and bones cutting through the cube, then restores bone lengths. Corrections
+  ease in over ~60 ms so nothing pops. A free cube under the hand is something to rest on, like the
+  table. In a fist the drawn thumb is guided to rest across the outside of the curled fingers,
+  because tracking puts it inside them. Per-frame overlap depth is recorded for tuning.
 - **Solid hand:** the drawn hand is a rigid skeleton with fixed cartoon bone lengths
   (`HandSkeleton.kt`). From tracking we read only joint angles (finger curl, a little spread, thumb
   direction and bend), clamp them to real hand limits and smooth them. Noisy landmark depth can't

@@ -137,6 +137,48 @@ class TuningAnalyzer(
             }
         }
 
+        // --- Object tasks (live game results) -------------------------------------------------
+        val outcomes = rec.events.filterIsInstance<Recording.Outcome>()
+        if (outcomes.isNotEmpty()) {
+            out.line("tasks: %d of %d done".format(Locale.US, outcomes.count { it.success }, outcomes.size))
+            m["tasks_done"] = outcomes.count { it.success }.toDouble()
+            for (o in outcomes) {
+                val d = o.detail
+                fun n(k: String) = (d[k] as? Number)?.toDouble()
+                val extras = buildList {
+                    add("grab attempts %d, grabs %d".format(Locale.US, n("attempts")?.toInt() ?: 0, n("grabs")?.toInt() ?: 0))
+                    n("drops")?.takeIf { it > 0 }?.let { add("drops %d".format(Locale.US, it.toInt())) }
+                    n("held_shake_mm")?.let { add("held cube shake %.2f mm/frame (moving %.1f)".format(Locale.US, it, n("held_motion_mm") ?: 0.0)) }
+                    n("error_mm")?.let { add("placed %.0f mm from center".format(Locale.US, it)) }
+                    n("release_speed")?.takeIf { o.step == "throw" }?.let { add("throw %.1f m/s".format(Locale.US, it)) }
+                    if (d["used_fist"] == false) add("never fist-grabbed")
+                }
+                out.line("  %s: %s in %.1f s — %s".format(Locale.US, o.step, if (o.success) "done" else "timed out", o.seconds, extras.joinToString(", ")))
+                m["${o.step}_ok"] = if (o.success) 1.0 else 0.0
+                m["${o.step}_seconds"] = o.seconds
+                n("held_shake_mm")?.let { m["held_shake_mm"] = it }
+                n("error_mm")?.let { m["${o.step}_error_mm"] = it }
+            }
+            val evts = rec.events.filterIsInstance<Recording.GameEvt>()
+            val forced = evts.count { it.kind == "drop_forced" }
+            if (forced > 0) out.line("  cube let go by the game %d× (hand lost or paused)".format(Locale.US, forced))
+        }
+
+        // --- Drawn-hand collisions ------------------------------------------------------------
+        run {
+            val withCol = rec.events.filterIsInstance<Recording.Sample>().filter { it.image != null }
+            if (withCol.isNotEmpty() && withCol.any { it.collision > 0f || it.collisionResidual > 0f }) {
+                val depths = withCol.map { it.collision * 1000.0 }.sorted()
+                val residual = withCol.map { it.collisionResidual * 1000.0 }.sorted()
+                val share = 100.0 * withCol.count { it.collision > 0.002f } / withCol.size
+                m["collision_frames_pct"] = share
+                m["collision_p95_mm"] = pct(depths, 0.95)
+                m["collision_residual_p95_mm"] = pct(residual, 0.95)
+                out.line("hand overlaps: %.0f%% of frames over 2 mm, depth p50/p95/max %.1f/%.1f/%.1f mm; after fixing p95 %.1f max %.1f mm".format(
+                    Locale.US, share, pct(depths, 0.5), pct(depths, 0.95), depths.last(), pct(residual, 0.95), residual.last()))
+            }
+        }
+
         // --- Free play overview ----------------------------------------------------------------
         if (!rec.guided && present.size > 30) {
             val grabs = frames.zipWithNext().count { (a, b) -> a.gesture == Gesture.OPEN && b.gesture != Gesture.OPEN }
