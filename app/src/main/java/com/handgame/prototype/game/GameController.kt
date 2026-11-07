@@ -23,6 +23,24 @@ enum class HapticEvent { GRAB, RELEASE }
 /** A glowing ring on the table that guided tasks ask the player to put the cube in. */
 data class Target(val center: Vec3, val radius: Float)
 
+/** What the hand is doing, as seen by critters and props. */
+data class HandState(
+    val visible: Boolean,
+    val palm: Vec3,
+    val palmVelocity: Vec3,
+    val open: Boolean,
+    val tips: List<Pair<Vec3, Float>>,
+)
+
+/**
+ * Something on the table the hand can pick up. The first toy is the main cube; levels and the
+ * tutorial add more. Inactive toys are hidden, ignored by physics and can't be grabbed.
+ */
+class Toy(val body: RigidBox, val color: FloatArray, var home: Vec3, val tag: String) {
+    var active = true
+    internal var outOfPlayTimer = 0f
+}
+
 /** Something the cube did, for tuning recordings. */
 data class GameEvent(val kind: String, val gesture: String, val cube: Vec3, val speed: Float)
 
@@ -45,6 +63,12 @@ data class DebugInfo(
     val landmarks: FloatArray?,
 )
 
+/** What the tutorial overlay shows. */
+data class TutorialUi(
+    val number: Int, val count: Int, val title: String, val prompt: String,
+    val progress: Float, val celebrating: Boolean, val finished: Boolean,
+)
+
 /** Snapshot of game state for the Compose UI. */
 data class GameUi(
     val phase: Phase = Phase.CALIBRATING,
@@ -59,6 +83,8 @@ data class GameUi(
     /** Raw landmarks (un-mirrored) for drawing the hand over the camera view during calibration. */
     val calibrationLandmarks: FloatArray? = null,
     val frontCamera: Boolean = true,
+    /** Tutorial state, when it's running. */
+    val tutorial: TutorialUi? = null,
     val countdown: Int = 0,
     val handFoundFlash: Boolean = false,
     /** 0..1 strength of the "hand is near the edge of the camera's view" glow, and its edge. */
@@ -103,7 +129,94 @@ class GameController(
     private val handednessVoter = HandednessVoter()
 
     val world = PhysicsWorld(PlaySpace.TABLE_HALF_X, PlaySpace.TABLE_HALF_Z)
-    val cube = RigidBox(Vec3(PlaySpace.CUBE_HALF, PlaySpace.CUBE_HALF, PlaySpace.CUBE_HALF), mass = 0.4f)
+    val toys = ArrayList<Toy>()
+    /** The main cube (always the first toy). */
+    val mainToy = Toy(
+        RigidBox(Vec3(PlaySpace.CUBE_HALF, PlaySpace.CUBE_HALF, PlaySpace.CUBE_HALF), mass = 0.4f),
+        floatArrayOf(0.12f, 0.76f, 0.62f), Vec3(0f, 0.35f, 0f), "cube",
+    )
+    val cube: RigidBox get() = mainToy.body
+
+    /** The toy in the hand, if any. */
+    var held: Toy? = null
+        private set
+    /** The toy within grab range of the hand (gets the highlight glow). */
+    var focus: Toy? = null
+        private set
+
+    /** Adds a toy resting at [home]. */
+    fun addToy(half: Vec3, color: FloatArray, home: Vec3, tag: String, mass: Float = 0.3f): Toy {
+        val toy = Toy(RigidBox(half, mass), color, home, tag)
+        toys += toy
+        world.bodies += toy.body
+        placeToy(toy, home)
+        return toy
+    }
+
+    fun removeToy(toy: Toy) {
+        if (toy === mainToy) { setToyActive(toy, false); return }
+        if (held === toy) releaseHeld(throwIt = false)
+        toys.remove(toy)
+        world.bodies.remove(toy.body)
+    }
+
+    fun setToyActive(toy: Toy, active: Boolean) {
+        if (toy.active == active) return
+        if (!active && held === toy) releaseHeld(throwIt = false)
+        toy.active = active
+        if (active) { if (toy.body !in world.bodies) world.bodies += toy.body; placeToy(toy, toy.home) }
+        else world.bodies.remove(toy.body)
+    }
+
+    /** Puts [toy] at [pos], resting and upright, letting go of it if held. */
+    fun placeToy(toy: Toy, pos: Vec3) {
+        if (held === toy) releaseHeld(throwIt = false)
+        val b = toy.body
+        b.position = pos
+        b.orientation = Quat.IDENTITY
+        b.linearVelocity = Vec3.ZERO
+        b.angularVelocity = Vec3.ZERO
+        b.wake()
+        toy.outOfPlayTimer = 0f
+    }
+
+    private val activeToys get() = toys.filter { it.active }
+
+    /** The tutorial room, while it's running. */
+    var tutorial: Tutorial? = null
+        private set
+    var onTutorialFinished: (() -> Unit)? = null
+
+    fun startTutorial() {
+        tutorial?.exit()
+        tutorial = Tutorial(this).also {
+            it.onFinished = { onTutorialFinished?.invoke() }
+            it.start()
+        }
+    }
+
+    /** Leaves the tutorial (finished or not); the critter friend stays on the table. */
+    fun exitTutorial() {
+        tutorial?.exit()
+        tutorial = null
+    }
+
+    /** Puts the critter friend on the table (awake), e.g. for free play after the tutorial. */
+    fun spawnFriend() {
+        if (critter == null) critter = Critter(Tutorial.CRITTER_HOME).also { it.wake() }
+    }
+
+    /** Push buttons on the table (the tutorial's "poke" lesson). */
+    val buttons = ArrayList<PushButton>()
+    /** The critter friend, if one is in the scene. */
+    var critter: Critter? = null
+
+    // Fingertip tracking for pokes and flicks.
+    private var prevTip: Vec3? = null
+    /** Smoothed index-fingertip velocity (m/s). */
+    var tipVelocity = Vec3.ZERO
+        private set
+    private val touching = HashSet<Toy>()
 
     /** Optional target ring shown on the table (guided tasks). */
     var target: Target? = null
@@ -113,7 +226,11 @@ class GameController(
     /** Returns and clears the events since the last call. Only the latest few are kept between calls. */
     fun drainEvents(): List<GameEvent> = ArrayList(events).also { events.clear() }
 
+    /** Events from this frame only (the tutorial watches these). */
+    private val frameEvents = ArrayList<GameEvent>()
+
     private fun emit(e: GameEvent) {
+        frameEvents += e
         events.addLast(e)
         while (events.size > MAX_QUEUED_EVENTS) events.removeFirst()
     }
@@ -121,25 +238,18 @@ class GameController(
     /** The gesture the cube is currently held with (OPEN when not holding). */
     val heldWith: Gesture get() = if (holding) grabGesture else Gesture.OPEN
 
-    /** Puts the cube at [pos] (resting, upright), letting go of it if held. */
-    fun placeCube(pos: Vec3) {
-        releaseHeld(throwIt = false)
-        cube.position = pos
-        cube.orientation = Quat.IDENTITY
-        cube.linearVelocity = Vec3.ZERO
-        cube.angularVelocity = Vec3.ZERO
-        cube.wake()
-        outOfPlayTimer = 0f
-    }
+    /** Puts the main cube at [pos] (resting, upright), letting go of it if held. */
+    fun placeCube(pos: Vec3) = placeToy(mainToy, pos)
 
     /** True while the hand should be drawn. */
     var handVisible = false
         private set
-    /** 0..1 grab-range glow on the cube. */
+    /** 0..1 grab-range glow, on [highlightToy]. */
     var highlight = 0f
         private set
-    var holding = false
+    var highlightToy: Toy? = null
         private set
+    val holding: Boolean get() = held != null
 
     var handedness = Handedness.UNKNOWN
         private set
@@ -168,8 +278,6 @@ class GameController(
     private var resumeTimer = 0f
     private var handFoundFlashTimer = 0f
 
-    // Cube respawn.
-    private var outOfPlayTimer = 0f
 
     // Render-rate measurement.
     private var fpsFrames = 0
@@ -179,6 +287,7 @@ class GameController(
     var trackingFpsProvider: () -> Float = { 0f }
 
     init {
+        toys += mainToy
         world.bodies.add(cube)
         respawnCube()
     }
@@ -230,6 +339,7 @@ class GameController(
      */
     fun update(dtRaw: Float, sample: TrackingSample?, nowNs: Long? = null) {
         interpolating = nowNs != null
+        frameEvents.clear()
         val dt = dtRaw.coerceIn(0f, 0.1f)
         timeSec += dt
         measureFps(dt)
@@ -266,14 +376,20 @@ class GameController(
         if (phase == Phase.PLAYING) updateGrab(fresh) else releaseHeld(throwIt = false)
         updateHighlight(dt)
 
+        updateTouch(dt)
         world.step(dt) { step ->
-            if (holding) {
+            held?.let {
                 val target = heldTarget()
-                world.drive(cube, target.first, target.second, step)
+                world.drive(it.body, target.first, target.second, step)
             }
         }
-        checkCubeBounds(dt)
+        checkToyBounds(dt)
+        rig.pose.palmCenter.let { pc ->
+            lastPalm?.let { recentPalmVelocity = Vec3.lerp(recentPalmVelocity, (pc - it) / dt.coerceAtLeast(1e-3f), (10f * dt).coerceAtMost(1f)) }
+            lastPalm = pc
+        }
         updateGripPose(dt)
+        if (phase == Phase.PLAYING) tutorial?.update(dt, frameEvents)
         if (handFoundFlashTimer > 0f) handFoundFlashTimer -= dt
     }
 
@@ -405,34 +521,46 @@ class GameController(
     private fun currentAnchor(): Vec3 =
         if (holding && grabGesture == Gesture.FIST) rig.pose.palmCenter else rig.pose.pinchPoint
 
-    private fun reachDistance(): Float {
+    private fun reachDistance(toy: Toy): Float {
         val p = rig.pose
-        val contact = minOf(cube.distanceTo(p.pinchPoint), cube.distanceTo(p.fistPoint), cube.distanceTo(p.palmCenter) - 0.02f * HandLook.scale)
+        val b = toy.body
+        val contact = minOf(b.distanceTo(p.pinchPoint), b.distanceTo(p.fistPoint), b.distanceTo(p.palmCenter) - 0.02f * HandLook.scale)
         // The view is mostly top-down, where height is hard to judge. Count the hand as in reach
-        // when it's over the cube on screen and not too far above it.
-        return minOf(contact, overheadDistance(p.pinchPoint), overheadDistance(p.fistPoint))
+        // when it's over the toy on screen and not too far above it.
+        return minOf(contact, overheadDistance(b, p.pinchPoint), overheadDistance(b, p.fistPoint))
     }
 
-    /** Horizontal distance from [point] to the cube's footprint, if [point] is within reach above it. */
-    private fun overheadDistance(point: Vec3): Float {
-        val top = cube.position.y + PlaySpace.CUBE_HALF
+    /** Horizontal distance from [point] to [b]'s footprint, if [point] is within reach above it. */
+    private fun overheadDistance(b: RigidBox, point: Vec3): Float {
+        val top = b.position.y + b.halfExtents.y
         val above = point.y - top
-        if (above < -PlaySpace.CUBE_HALF || above > OVERHEAD_REACH) return Float.MAX_VALUE
-        val flat = Vec3(point.x, cube.position.y, point.z)
-        return cube.distanceTo(flat)
+        if (above < -b.halfExtents.y || above > OVERHEAD_REACH) return Float.MAX_VALUE
+        val flat = Vec3(point.x, b.position.y, point.z)
+        return b.distanceTo(flat)
     }
+
+    /** The active toy nearest the hand's grab points, and its reach distance. */
+    private fun nearestToy(): Pair<Toy, Float>? =
+        activeToys.map { it to reachDistance(it) }.minByOrNull { it.second }
+
+    /** The toy the drawn hand should account for (held, else the one closest to the palm). */
+    private fun contactToy(): Toy? = held ?: activeToys.minByOrNull { it.body.distanceTo(rig.pose.palmCenter) }
+
+    private var lastNearToy: Toy? = null
 
     private fun updateGrab(fresh: Boolean) {
         if (!handVisible) return
         val g = gestures.state
-        val near = reachDistance() < GRAB_RANGE
-        if (near && g == Gesture.OPEN) lastNearTime = timeSec
+        val nearest = nearestToy()
+        val nearToy = nearest?.takeIf { it.second < GRAB_RANGE }?.first
+        if (nearToy != null && g == Gesture.OPEN) { lastNearTime = timeSec; lastNearToy = nearToy }
 
         if (!holding) {
             val closedNow = g != Gesture.OPEN && grabGesture == Gesture.OPEN
             // Closing the hand moves the fingertips, so accept a grab if the open hand was in range
             // a moment ago, not just this exact frame.
-            if (closedNow && (near || timeSec - lastNearTime < 0.3)) startGrab(g)
+            val candidate = nearToy ?: lastNearToy?.takeIf { timeSec - lastNearTime < 0.3 && it.active }
+            if (closedNow && candidate != null) startGrab(g, candidate)
             grabGesture = g
         } else {
             if (g == Gesture.OPEN) {
@@ -447,8 +575,9 @@ class GameController(
         }
     }
 
-    private fun startGrab(g: Gesture) {
-        holding = true
+    private fun startGrab(g: Gesture, toy: Toy) {
+        held = toy
+        val cube = toy.body
         grabGesture = g
         cube.held = true
         cube.wake()
@@ -475,11 +604,11 @@ class GameController(
         heldTargetOffset = if (g == Gesture.FIST) {
             // Under the palm and tucked back toward the wrist, so the fingers curl down in front of
             // it (like gripping a block from above) instead of into it.
-            Vec3(0f, -(HandLook.PALM_HALF_THICKNESS + PlaySpace.CUBE_HALF + 0.004f), 0.035f * HandLook.scale)
+            Vec3(0f, -(HandLook.PALM_HALF_THICKNESS + cube.halfExtents.y + 0.004f), 0.035f * HandLook.scale)
         } else {
             // Out beyond the fingertips, so the index finger's bones clear the cube.
             val out = (p.pinchPoint - p.palmCenter).normalized()
-            inv.rotate(out * (PlaySpace.CUBE_HALF * 0.45f))
+            inv.rotate(out * (cube.halfExtents.x * 0.45f))
         }
         onHaptic(HapticEvent.GRAB)
     }
@@ -487,7 +616,8 @@ class GameController(
     private fun heldTarget(): Pair<Vec3, Quat> {
         val p = rig.pose
         var pos = grabAnchor(grabGesture) + p.rotation.rotate(heldLocalOffset)
-        if (pos.y < PlaySpace.CUBE_HALF * 0.9f) pos = Vec3(pos.x, PlaySpace.CUBE_HALF * 0.9f, pos.z)
+        val floor = (held?.body?.halfExtents?.y ?: PlaySpace.CUBE_HALF) * 0.9f
+        if (pos.y < floor) pos = Vec3(pos.x, floor, pos.z)
         return pos to (p.rotation * heldRelRotation).normalized()
     }
 
@@ -504,7 +634,7 @@ class GameController(
             val forward = p.rotation.rotate(Vec3(0f, 0f, -1f))
             val right = p.rotation.rotate(Vec3(1f, 0f, 0f))
             val thumbSide = if ((p.joints[Lm.THUMB_MCP] - p.palmCenter) dot right >= 0f) right else -right
-            GripSolver.solve(p.joints, p.renderJoints, cube, grabGesture, gripAxis, gripWeight, forward, thumbSide)
+            GripSolver.solve(p.joints, p.renderJoints, held!!.body, grabGesture, gripAxis, gripWeight, forward, thumbSide)
             for (i in gripOffsets.indices) gripOffsets[i] = p.renderJoints[i] - p.joints[i]
         } else {
             // After release, let the fingers relax back to the tracked pose instead of snapping
@@ -514,7 +644,7 @@ class GameController(
                 gripOffsets[i] = gripOffsets[i] * decay
                 relaxed[i] = p.joints[i] + gripOffsets[i]
             }
-            GripSolver.solve(relaxed, p.renderJoints, cube, Gesture.OPEN, gripAxis, 0f, Vec3.ZERO, Vec3.ZERO)
+            GripSolver.solve(relaxed, p.renderJoints, contactToy()?.body ?: cube, Gesture.OPEN, gripAxis, 0f, Vec3.ZERO, Vec3.ZERO)
         }
         resolveCollisions(dt)
     }
@@ -532,7 +662,8 @@ class GameController(
         val p = rig.pose
         for (i in 0 until Lm.COUNT) collisionScratch[i] = p.renderJoints[i]
         val overTable = abs(p.palmCenter.x) < PlaySpace.TABLE_HALF_X + 0.05f && abs(p.palmCenter.z) < PlaySpace.TABLE_HALF_Z + 0.05f
-        HandCollision.solve(collisionScratch, p.rotation, cube, if (overTable) 0f else null, collisionStats, holdingCube = holding)
+        val bumps = critter?.let { listOf(HandCollision.Bump(it.position, Critter.BASE_RADIUS * 1.4f, it.top)) } ?: emptyList()
+        HandCollision.solve(collisionScratch, p.rotation, contactToy()?.body, if (overTable) 0f else null, collisionStats, holdingCube = holding, bumps = bumps)
         val blend = (COLLISION_EASE * dt).coerceIn(0f, 1f)
         for (i in 0 until Lm.COUNT) {
             val target = collisionScratch[i] - p.renderJoints[i]
@@ -545,8 +676,9 @@ class GameController(
     private val relaxed = Array(Lm.COUNT) { Vec3.ZERO }
 
     private fun releaseHeld(throwIt: Boolean) {
-        if (!holding) return
-        holding = false
+        val toy = held ?: return
+        held = null
+        val cube = toy.body
         cube.held = false
         cube.wake()
         if (throwIt) {
@@ -576,9 +708,13 @@ class GameController(
     }
 
     private fun updateHighlight(dt: Float) {
+        val nearest = if (phase == Phase.PLAYING && handVisible && !holding) nearestToy() else null
+        focus = nearest?.takeIf { it.second < GRAB_RANGE }?.first
+        val wanted = held ?: focus
+        if (wanted != null && wanted !== highlightToy) { highlightToy = wanted; highlight = 0f }
         val target = when {
             holding -> 0.6f
-            phase == Phase.PLAYING && handVisible && reachDistance() < GRAB_RANGE -> 1f
+            focus != null -> 1f
             else -> 0f
         }
         val rate = 10f * dt
@@ -586,26 +722,101 @@ class GameController(
     }
 
     // ------------------------------------------------------------------------------------------
+    // Pokes, flicks, buttons, critter
+    // ------------------------------------------------------------------------------------------
+
+    /** Fingertips (tracked joints) with their drawn radius. */
+    private fun fingertips(): List<Pair<Vec3, Float>> {
+        val j = rig.pose.joints
+        return listOf(Lm.INDEX_TIP, Lm.MIDDLE_TIP, Lm.THUMB_TIP).map { j[it] to HandLook.jointRadius(it) }
+    }
+
+    private fun updateTouch(dt: Float) {
+        val live = phase == Phase.PLAYING && handVisible
+        val tip = rig.pose.joints[Lm.INDEX_TIP]
+        if (live) {
+            prevTip?.let { prev ->
+                val v = (tip - prev) / dt.coerceAtLeast(1e-3f)
+                tipVelocity = Vec3.lerp(tipVelocity, v, (TIP_VEL_SMOOTH * dt).coerceAtMost(1f))
+            }
+            prevTip = tip
+        } else { prevTip = null; tipVelocity = Vec3.ZERO }
+
+        val tips = if (live) fingertips() else emptyList()
+        val pointer = if (live && gestures.pointing) tip to rig.pose.dip else null
+        for (b in buttons) b.update(dt, tips, pointer)
+
+        // A pointing fingertip pushes toys: a quick flick sends them flying, slow contact nudges
+        // them. (Only when pointing, so an open hand reaching to grab doesn't shove things away.)
+        val canTouch = live && !holding && gestures.pointing && gestures.state == Gesture.OPEN
+        val nowTouching = HashSet<Toy>()
+        if (canTouch) for (toy in activeToys) {
+            val b = toy.body
+            val contact = tips.take(2).any { (t, r) -> b.distanceTo(t) < r }
+            if (!contact) continue
+            nowTouching += toy
+            val flat = Vec3(tipVelocity.x, 0f, tipVelocity.z)
+            if (toy !in touching && flat.length() > FLICK_SPEED) {
+                b.wake()
+                b.linearVelocity = (flat * FLICK_GAIN).clampLength(FLICK_MAX_SPEED) + Vec3(0f, 0.6f, 0f)
+                b.angularVelocity = Vec3(flat.z, 0f, -flat.x) * 8f
+                emit(GameEvent("flick", "", b.position, b.linearVelocity.length()))
+            } else if (flat.length() > 0.05f) {
+                b.wake()
+                val push = flat * NUDGE_GAIN
+                b.linearVelocity = Vec3(push.x, b.linearVelocity.y, push.z)
+            }
+        }
+        touching.clear(); touching += nowTouching
+
+        critter?.update(dt, this)
+    }
+
+    /** For the critter: what the hand is doing this frame. */
+    internal fun handForCritter(): HandState = HandState(
+        visible = phase == Phase.PLAYING && handVisible,
+        palm = rig.pose.palmCenter,
+        palmVelocity = recentPalmVelocity,
+        open = gestures.state == Gesture.OPEN && !gestures.pointing,
+        tips = fingertips(),
+    )
+
+    private var lastPalm: Vec3? = null
+    private var recentPalmVelocity = Vec3.ZERO
+
+    internal fun emitEvent(kind: String, at: Vec3) = emit(GameEvent(kind, "", at, 0f))
+
+    // ------------------------------------------------------------------------------------------
     // Housekeeping
     // ------------------------------------------------------------------------------------------
 
-    private fun checkCubeBounds(dt: Float) {
-        val pos = cube.position
-        val offTable = pos.y < -0.2f || abs(pos.x) > 3f || abs(pos.z) > 3f
-        outOfPlayTimer = if (offTable && !holding) outOfPlayTimer + dt else 0f
-        if (outOfPlayTimer > 1.2f || pos.y < -5f) respawnCube()
+    private fun checkToyBounds(dt: Float) {
+        for (toy in activeToys) {
+            val pos = toy.body.position
+            val offTable = pos.y < -0.2f || abs(pos.x) > 3f || abs(pos.z) > 3f
+            toy.outOfPlayTimer = if (offTable && held !== toy) toy.outOfPlayTimer + dt else 0f
+            if (toy.outOfPlayTimer > 1.2f || pos.y < -5f) respawnToy(toy)
+        }
     }
 
-    fun respawnCube() {
-        releaseHeld(throwIt = false)
-        emit(GameEvent("respawn", "", cube.position, 0f))
-        cube.position = Vec3(0f, 0.35f, 0f)
-        cube.orientation = Quat.fromAxisAngle(Vec3(0.3f, 1f, 0.2f), 0.5f)
-        cube.linearVelocity = Vec3.ZERO
-        cube.angularVelocity = Vec3.ZERO
-        cube.wake()
-        outOfPlayTimer = 0f
+    fun respawnCube() = respawnToy(mainToy)
+
+    /** Drops [toy] back onto the table at its home, with a little tilt so it tumbles in. */
+    fun respawnToy(toy: Toy) {
+        if (held === toy) releaseHeld(throwIt = false)
+        val b = toy.body
+        emit(GameEvent("respawn", toy.tag, b.position, 0f))
+        b.position = toy.home
+        b.orientation = Quat.fromAxisAngle(Vec3(0.3f, 1f, 0.2f), 0.5f)
+        b.linearVelocity = Vec3.ZERO
+        b.angularVelocity = Vec3.ZERO
+        b.wake()
+        toy.outOfPlayTimer = 0f
+        onToyRespawned?.invoke(toy)
     }
+
+    /** Called when a toy falls off and is put back (the tutorial uses this). */
+    var onToyRespawned: ((Toy) -> Unit)? = null
 
     private fun measureFps(dt: Float) {
         fpsFrames++
@@ -649,6 +860,9 @@ class GameController(
             calibrationCursor = lastSample?.hand?.takeIf { handVisible && phase == Phase.CALIBRATING }?.let { pinchUv(it, lastSample!!.frontCamera) },
             calibrationLandmarks = if (phase == Phase.CALIBRATING && handVisible) lastSample?.hand?.image else null,
             frontCamera = settings.frontCamera,
+            tutorial = tutorial?.let { t ->
+                TutorialUi(t.lessonNumber, t.lessonCount, t.lesson.title, t.prompt(settings.frontCamera), t.progress, t.celebrating > 0f, t.finished)
+            },
             countdown = if (phase == Phase.RESUMING) kotlin.math.ceil(resumeTimer / (RESUME_SECONDS / 3f)).toInt().coerceIn(1, 3) else 0,
             handFoundFlash = handFoundFlashTimer > 0f,
             edgeWarning = if (handVisible && phase != Phase.CALIBRATING) rig.pose.edgeWarning else 0f,
@@ -663,6 +877,12 @@ class GameController(
         const val HAND_LOSS_GRACE = 0.4
         const val RESUME_SECONDS = 1.2f
         const val GRAB_RANGE = 0.06f
+        /** Fingertip speed (m/s) that turns a touch into a flick. */
+        const val FLICK_SPEED = 0.7f
+        const val FLICK_GAIN = 1.4f
+        const val FLICK_MAX_SPEED = 4.5f
+        const val NUDGE_GAIN = 0.8f
+        const val TIP_VEL_SMOOTH = 25f
         /** Cube events kept while nobody is recording them. */
         const val MAX_QUEUED_EVENTS = 64
         /** How quickly collision corrections ease in (per second; ~60 ms to settle). */

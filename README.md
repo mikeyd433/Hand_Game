@@ -44,19 +44,31 @@ The hand model (`hand_landmarker.task`, about 7.8 MB) is downloaded by Gradle in
      becomes the edge of your play area. **Can't reach** pulls a corner inward; **Skip** keeps a
      default area.
 
-2. **Move** your hand to move the on-screen hand. Your comfortable range (from calibration) covers
+2. **Tutorial room** (first launch, right after calibration; replay it from ⚙). Six short lessons,
+   each moving on when its task is done:
+   1. **Pinch:** pick up the little block and lift it.
+   2. **Fist:** grab the big block with a fist and set it in the glowing ring.
+   3. **Poke:** point your index finger over the button and push toward the screen (back camera:
+      reach farther behind the phone). Pressing it wakes your new friend.
+   4. **Pet:** glide your open hand over the critter. It wiggles happily and hearts float up.
+   5. **Flick:** point and flick the little block across to the critter with a quick swipe.
+   6. **Throw:** throw a block into the far ring.
+
+   Afterwards the critter stays on the table in free play.
+3. **Move** your hand to move the on-screen hand. Your comfortable range (from calibration) covers
    the whole screen. It is capped so you can reach every screen edge without your hand leaving the
    camera's view, and a soft glow appears on the screen edge if it starts to. The cube glows when it
    is in reach.
-3. **Grab** with a **pinch** (thumb and index finger together) or a **fist**.
-4. **Lift** by pulling your hand back. The screen is a window looking down at the table, so pushing
+4. **Grab** with a **pinch** (thumb and index finger together) or a **fist**.
+5. **Lift** by pulling your hand back. The screen is a window looking down at the table, so pushing
    "into" it goes down:
    - *Front camera:* move your hand toward the screen to lower, pull it back toward yourself to lift.
    - *Back camera:* reach farther behind the phone to lower, bring your hand back toward it to lift.
 
-   **Reverse lift direction** in settings flips this.
-5. **Throw** by opening your hand while moving. The cube flies off with your hand's speed.
-6. **Pause:** take your hand out of view and the game pauses after 0.4 s. Anything you're holding
+   **Reverse lift direction** in settings flips this. Pushing past your calibrated distance dips the hand
+   a little below hover height, so fingertips can press things.
+6. **Throw** by opening your hand while moving. The cube flies off with your hand's speed.
+7. **Pause:** take your hand out of view and the game pauses after 0.4 s. Anything you're holding
    is set down. Show your hand again to resume after a short countdown.
 
 The ⚙ button opens settings: camera, playing hand, movement and lift sensitivity, hand size, vibration,
@@ -106,7 +118,10 @@ app/src/main/java/com/handgame/prototype/
 ├── game/
 │   ├── HandRig.kt         landmarks → smoothed world pose (X/Z from position, Y from apparent size)
 │   ├── HandSkeleton.kt    rigid hand: angles from landmarks → fixed-length skeleton
-│   ├── HandCollision.kt   drawn-hand overlap detection/resolution (fingers, palm, table, cube)
+│   ├── HandCollision.kt   drawn-hand overlap detection/resolution (fingers, palm, table, cube, bumps)
+│   ├── Critter.kt         the critter friend: sleep/wake, look, squish, pet, hearts, cheer
+│   ├── Props.kt           push button
+│   ├── Tutorial.kt        tutorial room lessons
 │   ├── ViewRig.kt         scene camera framing + screen→world projection (shared with renderer)
 │   ├── GameController.kt  phases (calibrate/play/pause/resume), grab, soft snap, throw, highlight
 │   └── GameSettings.kt    settings + calibration persistence
@@ -115,6 +130,7 @@ app/src/main/java/com/handgame/prototype/
 ├── render/
 │   ├── MeshFactory.kt     sphere, cylinder, rounded box, gradient dome
 │   ├── HandMeshBuilder.kt smooth hand rebuilt each frame: tapered fingers, palm, thumb pad, cuff
+│   ├── CritterMeshBuilder.kt critter body/feet/mouth rebuilt each frame (from the design sketch)
 │   ├── Materials.kt       toy vinyl material + gradient backdrop (shader source in Kotlin)
 │   └── SceneRenderer.kt   Filament scene, lights, dynamic hand meshes + outline, frame loop
 ├── tuning/                recorder, guided-test script, JSONL format, replay analyzer

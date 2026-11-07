@@ -77,6 +77,9 @@ fun GameScreen(
     onCopySummary: () -> Unit = {},
     onCloseResults: () -> Unit = {},
     onPullTargetIn: () -> Unit = {},
+    onSkipLesson: () -> Unit = {},
+    onLeaveTutorial: () -> Unit = {},
+    onReplayTutorial: () -> Unit = {},
 ) {
     var showSettings by remember { mutableStateOf(false) }
 
@@ -111,6 +114,12 @@ fun GameScreen(
                     ui.debug?.let { DebugOverlay(it, debugFrame, frontCamera, Modifier.align(Alignment.TopStart)) }
                 }
 
+                // Tutorial lesson card (hidden while calibrating or paused).
+                val tut = ui.tutorial
+                if (tut != null && ui.phase == Phase.PLAYING && tuning.mode == TuningMode.IDLE) {
+                    TutorialOverlay(tut, onSkipLesson, onLeaveTutorial)
+                }
+
                 // While a guided test runs, its card replaces the pause/resume prompts at the bottom.
                 if (tuning.mode != TuningMode.IDLE) {
                     TuningOverlay(tuning, onStopTuning, onMark, onSaveRecording, onCopySummary, onCloseResults)
@@ -140,7 +149,8 @@ fun GameScreen(
                         onRecalibrate = { onRecalibrate(); showSettings = false },
                         onResetCube = { onResetCube(); showSettings = false },
                         onClose = { showSettings = false },
-                        canTune = canTune && tuning.mode == TuningMode.IDLE,
+                        canTune = canTune && tuning.mode == TuningMode.IDLE && ui.tutorial == null,
+                        onReplayTutorial = { onReplayTutorial(); showSettings = false },
                         onStartTuning = { guided -> onStartTuning(guided); showSettings = false },
                     )
                 }

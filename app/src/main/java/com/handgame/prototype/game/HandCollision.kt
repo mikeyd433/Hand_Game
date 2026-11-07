@@ -87,13 +87,20 @@ object HandCollision {
      * Resolves overlaps in [joints] in place.
      * @param tableY table-top height, or null to skip the table (e.g. hand beyond its edge).
      */
-    fun solve(joints: Array<Vec3>, palm: Quat, cube: RigidBox?, tableY: Float?, stats: Stats, holdingCube: Boolean = false) {
+    /** A rounded bump the drawn hand rests on (e.g. a critter's head): dome of [radius], [top] high. */
+    class Bump(val center: Vec3, val radius: Float, val top: Float)
+
+    fun solve(
+        joints: Array<Vec3>, palm: Quat, cube: RigidBox?, tableY: Float?, stats: Stats,
+        holdingCube: Boolean = false, bumps: List<Bump> = emptyList(),
+    ) {
         stats.reset()
         val nearCubeForStats = cube != null && cube.distanceTo(joints[Lm.MIDDLE_MCP]) < 0.35f
         measureKinds(joints, palm, cube.takeIf { nearCubeForStats }, tableY, stats)
         // A free cube under the hand is a surface to rest on, like the table: lift the whole hand
         // just enough that no joint over the cube's footprint dips into it.
         if (cube != null && !holdingCube && nearCubeForStats) rideOver(joints, cube)
+        for (b in bumps) rideOverBump(joints, b)
         val lengths = Array(CHAINS.size) { f -> FloatArray(3) { k -> joints[CHAINS[f][k]].distance(joints[CHAINS[f][k + 1]]) } }
         val pinned = BooleanArray(Lm.COUNT).also { p -> CHAINS.forEach { p[it[0]] = true }; p[Lm.WRIST] = true }
         val nearCube = cube != null && cube.distanceTo(joints[Lm.MIDDLE_MCP]) < 0.35f
@@ -145,6 +152,24 @@ object HandCollision {
             // Only joints coming down onto the top (not a hand beside the cube at table level).
             if (local.y < 0f) continue
             lift = maxOf(lift, h.y + r - local.y)
+        }
+        if (lift <= 0f) return
+        for (i in 0 until Lm.COUNT) joints[i] = joints[i] + Vec3(0f, lift, 0f)
+    }
+
+    private fun rideOverBump(joints: Array<Vec3>, bump: Bump) {
+        var lift = 0f
+        val height = bump.top - bump.center.y
+        for (i in 0 until Lm.COUNT) {
+            val r = HandLook.jointRadius(i) * 0.9f
+            val d = kotlin.math.hypot(joints[i].x - bump.center.x, joints[i].z - bump.center.z)
+            val reach = bump.radius + r
+            if (d >= reach) continue
+            // Only joints coming from above (a hand beside the bump at table level slides past).
+            if (joints[i].y < bump.center.y + height * 0.35f) continue
+            val q = d / reach
+            val floor = bump.center.y + height * (1f - q * q) + r
+            lift = maxOf(lift, floor - joints[i].y)
         }
         if (lift <= 0f) return
         for (i in 0 until Lm.COUNT) joints[i] = joints[i] + Vec3(0f, lift, 0f)

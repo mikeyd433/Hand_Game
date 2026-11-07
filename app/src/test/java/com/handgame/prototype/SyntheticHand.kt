@@ -12,7 +12,13 @@ import com.handgame.prototype.tracking.TrackingSample
 object SyntheticHand {
     private val fingerX = floatArrayOf(0.03f, 0.01f, -0.01f, -0.03f) // index, middle, ring, pinky
 
-    fun world(g: Gesture): FloatArray {
+    fun world(g: Gesture, pointing: Boolean = false): FloatArray {
+        if (pointing) {
+            // Fist with the index finger straight out.
+            val fist = world(Gesture.FIST); val open = world(Gesture.OPEN)
+            for (i in 5..8) for (k in 0..2) fist[i * 3 + k] = open[i * 3 + k]
+            return fist
+        }
         val p = Array(Lm.COUNT) { floatArrayOf(0f, 0f, 0f) }
         p[Lm.WRIST] = floatArrayOf(0f, 0.09f, 0f)
         // Thumb on the +x side.
@@ -57,8 +63,8 @@ object SyntheticHand {
      * @param u,v palm position in the (un-mirrored) image.
      * @param scale image units per meter: larger = closer to the camera.
      */
-    fun hand(g: Gesture, u: Float = 0.5f, v: Float = 0.5f, scale: Float = 2.5f): RawHand {
-        val w = world(g)
+    fun hand(g: Gesture, u: Float = 0.5f, v: Float = 0.5f, scale: Float = 2.5f, pointing: Boolean = false): RawHand {
+        val w = world(g, pointing)
         val img = FloatArray(Lm.COUNT * 2)
         // Palm center in world (average of wrist + MCPs) maps to (u, v).
         var cx = 0f; var cy = 0f

@@ -56,6 +56,7 @@ fun SettingsPanel(
     onClose: () -> Unit,
     canTune: Boolean = false,
     onStartTuning: (guided: Boolean) -> Unit = {},
+    onReplayTutorial: () -> Unit = {},
 ) {
     Box(
         Modifier.fillMaxSize().background(Color(0x66302840)).clickable(onClick = onClose),
@@ -157,6 +158,10 @@ fun SettingsPanel(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onRecalibrate) { Text("Recalibrate") }
                 OutlinedButton(onClick = onResetCube) { Text("Reset cube") }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onReplayTutorial) { Text("Replay tutorial") }
             }
             Spacer(Modifier.height(8.dp))
             Button(onClick = onClose, modifier = Modifier.fillMaxWidth()) { Text("Done") }

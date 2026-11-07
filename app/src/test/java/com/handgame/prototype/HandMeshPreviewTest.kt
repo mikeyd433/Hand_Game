@@ -80,6 +80,37 @@ class HandMeshPreviewTest {
         }
     }
 
+    @Test fun renderCritterPreviews() {
+        val dir = File("build/hand-preview").apply { mkdirs() }
+        val states = listOf("awake", "asleep", "happy", "squished")
+        for (state in states) {
+            val game = GameController(GameSettings(), GameController.DEFAULT_CALIBRATION.copy(extents = listOf(0.2f, 0.12f, 0.2f, 0.15f)))
+            val critter = com.handgame.prototype.game.Critter(Vec3(0f, 0f, 0.1f))
+            val hand = com.handgame.prototype.game.HandState(true, Vec3(0.1f, 0.3f, 0.3f), Vec3.ZERO, false, emptyList())
+            if (state != "asleep") critter.wake()
+            repeat(120) { critter.update(1 / 60f, hand) } // settle
+            if (state == "happy") repeat(20) { critter.cheer(); critter.update(1 / 60f, hand.copy(palm = Vec3(0f, 0.2f, 0.1f), palmVelocity = Vec3(0.3f, 0f, 0f), open = true)) }
+            if (state == "squished") { critter.update(1 / 60f, hand.copy(tips = listOf(Vec3(0f, 0.14f, 0.1f) to 0.02f))); repeat(4) { critter.update(1 / 60f, hand) } }
+            val b = com.handgame.prototype.render.CritterMeshBuilder()
+            b.build(critter)
+            val img = Raster(540, 1170, game)
+            img.table()
+            img.loft(b.body, intArrayOf(189, 115, 255), outline = true)
+            img.loft(b.mouth, intArrayOf(40, 20, 60), outline = false)
+            val sphere = MeshFactory.sphere()
+            for (e in b.eyes) {
+                val r = 0.017f
+                img.blob(sphere, e.center, r, r * (1f - critter.eyesClosed * 0.85f), r * 0.7f, intArrayOf(255, 255, 255), e.normal)
+                if (critter.eyesClosed < 0.6f) {
+                    val side = (e.up cross e.normal).normalized()
+                    val pupil = e.center + e.normal * (r * 0.62f) + side * (critter.lookX * 0.006f) + e.up * (critter.lookY * 0.006f)
+                    img.blob(sphere, pupil, 0.007f, 0.007f, 0.004f, intArrayOf(30, 15, 45), e.normal)
+                }
+            }
+            img.save(File(dir, "critter-$state.png"), game, around = Vec3(0f, 0.08f, 0.1f), half = 110)
+        }
+    }
+
     /** Tiny z-buffered triangle rasterizer with Lambert shading. */
     private class Raster(val w: Int, val h: Int, val game: GameController) {
         val image = Img(w, h)
@@ -134,6 +165,20 @@ class HandMeshPreviewTest {
             mesh(l.positions, l.normals, l.indices, color)
         }
 
+        /** A scaled sphere oriented with its z axis along [normal]. */
+        fun blob(m: com.handgame.prototype.render.MeshData, center: Vec3, sx: Float, sy: Float, sz: Float, color: IntArray, normal: Vec3) {
+            val q = com.handgame.prototype.math.Quat.fromTo(Vec3(0f, 0f, 1f), normal.normalized())
+            val p = FloatArray(m.positions.size); val n = FloatArray(m.normals.size)
+            for (i in 0 until m.vertexCount) {
+                val l = Vec3(m.positions[i * 3] * sx, m.positions[i * 3 + 1] * sy, m.positions[i * 3 + 2] * sz)
+                val w = center + q.rotate(l)
+                val wn = q.rotate(Vec3(m.normals[i * 3] / sx, m.normals[i * 3 + 1] / sy, m.normals[i * 3 + 2] / sz)).normalized()
+                p[i * 3] = w.x; p[i * 3 + 1] = w.y; p[i * 3 + 2] = w.z
+                n[i * 3] = wn.x; n[i * 3 + 1] = wn.y; n[i * 3 + 2] = wn.z
+            }
+            mesh(p, n, m.indices, color)
+        }
+
         fun table() {
             val m = MeshFactory.roundedBox(0.5f, 0.04f, 0.9f, 0.035f)
             val p = FloatArray(m.positions.size) { if (it % 3 == 1) m.positions[it] - 0.04f else m.positions[it] }
@@ -152,10 +197,9 @@ class HandMeshPreviewTest {
             mesh(p, n, m.indices, intArrayOf(31, 194, 158))
         }
 
-        fun save(f: File, game: GameController) {
-            // Crop around the hand for a closer look.
-            val c = screen(game.rig.pose.palmCenter)
-            val half = 210
+        fun save(f: File, game: GameController, around: Vec3 = game.rig.pose.palmCenter, half: Int = 210) {
+            // Crop around the hand (or [around]) for a closer look.
+            val c = screen(around)
             val x0 = (c.first.toInt() - half).coerceIn(0, w - 2 * half)
             val y0 = (c.second.toInt() - half).coerceIn(0, h - 2 * half)
             writePng(f, image, x0, y0, 2 * half, 2 * half)

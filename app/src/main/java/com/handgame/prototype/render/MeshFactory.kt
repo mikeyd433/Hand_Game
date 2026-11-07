@@ -188,6 +188,35 @@ object MeshFactory {
         return MeshData(pos.toFloatArray(), nrm.toFloatArray(), idx.toShortArray(), col.toFloatArray())
     }
 
+    /**
+     * Surface of revolution around +Y from a profile of (radius, height) points, bottom to top.
+     * Profiles that start and end at radius 0 are closed. Normals come from the profile's slope.
+     */
+    fun lathe(profile: List<Pair<Float, Float>>, segments: Int = 36): MeshData {
+        val pos = ArrayList<Float>(); val nrm = ArrayList<Float>(); val idx = ArrayList<Short>()
+        val n = profile.size
+        for ((k, p) in profile.withIndex()) {
+            val prev = profile[(k - 1).coerceAtLeast(0)]; val next = profile[(k + 1).coerceAtMost(n - 1)]
+            // Outward normal of the profile curve: rotate its tangent (dr, dy) by -90°.
+            var nr = next.second - prev.second; var ny = -(next.first - prev.first)
+            val l = sqrt(nr * nr + ny * ny).let { if (it < 1e-6f) 1f else it }
+            nr /= l; ny /= l
+            for (s in 0..segments) {
+                val a = 2 * PI * s / segments
+                val c = cos(a).toFloat(); val sn = sin(a).toFloat()
+                pos += p.first * c; pos += p.second; pos += p.first * sn
+                nrm += nr * c; nrm += ny; nrm += nr * sn
+            }
+        }
+        val stride = segments + 1
+        for (k in 0 until n - 1) for (s in 0 until segments) {
+            val a = k * stride + s; val b = a + 1; val c = a + stride; val d = c + 1
+            idx += a.toShort(); idx += c.toShort(); idx += b.toShort()
+            idx += b.toShort(); idx += c.toShort(); idx += d.toShort()
+        }
+        return MeshData(pos.toFloatArray(), nrm.toFloatArray(), idx.toShortArray())
+    }
+
     private fun smooth(t: Float): Float { val x = t.coerceIn(0f, 1f); return x * x * (3 - 2 * x) }
     private fun mix(a: FloatArray, b: FloatArray, t: Float) =
         floatArrayOf(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t)

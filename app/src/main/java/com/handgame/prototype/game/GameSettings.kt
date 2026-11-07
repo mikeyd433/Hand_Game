@@ -97,6 +97,10 @@ class SettingsStore(context: Context) {
             .apply()
     }
 
+    var tutorialDone: Boolean
+        get() = prefs.getBoolean("tutorialDone", false)
+        set(v) { prefs.edit().putBoolean("tutorialDone", v).apply() }
+
     /** Calibration is stored per camera, since the two setups differ. */
     fun loadCalibration(frontCamera: Boolean): Calibration? {
         val k = if (frontCamera) "cal_front_" else "cal_back_"

@@ -40,6 +40,10 @@ class GestureDetector(var thresholds: GestureThresholds = GestureThresholds()) {
     var metrics = GestureMetrics(1f, 2f)
         private set
 
+    /** Index finger out with the other fingers curled (for poking). Not a grab gesture. */
+    var pointing = false
+        private set
+
     private var candidate: Gesture = Gesture.OPEN
     private var candidateFrames = 0
 
@@ -62,11 +66,17 @@ class GestureDetector(var thresholds: GestureThresholds = GestureThresholds()) {
         val pinch = if (!pinch2d.isNaN() && pinch3d < PINCH_3D_GUARD) minOf(pinch3d, pinch2d * PINCH_2D_SCALE) else pinch3d
 
         var maxCurl = 0f
-        for ((mcp, tip) in FINGERS) {
+        var indexRatio = 0f
+        var othersMax = 0f
+        for ((k, pair) in FINGERS.withIndex()) {
+            val (mcp, tip) = pair
             val ratio = joints[tip].distance(joints[Lm.WRIST]) /
                 joints[mcp].distance(joints[Lm.WRIST]).coerceAtLeast(1e-4f)
             if (ratio > maxCurl) maxCurl = ratio
+            if (k == 0) indexRatio = ratio else othersMax = maxOf(othersMax, ratio)
         }
+        pointing = if (pointing) indexRatio > POINT_INDEX_EXIT && othersMax < POINT_OTHERS_EXIT
+        else indexRatio > POINT_INDEX_ENTER && othersMax < POINT_OTHERS_ENTER
         metrics = GestureMetrics(pinch, maxCurl, pinch3d, pinch2d)
 
         val t = thresholds
@@ -99,6 +109,8 @@ class GestureDetector(var thresholds: GestureThresholds = GestureThresholds()) {
         /** The 2D pinch only counts when the 3D estimate is at least this close (rules out a thumb
          *  that merely crosses in front of the index finger in the camera's view). */
         const val PINCH_3D_GUARD = 0.75f
+        const val POINT_INDEX_ENTER = 1.65f; const val POINT_INDEX_EXIT = 1.5f
+        const val POINT_OTHERS_ENTER = 1.4f; const val POINT_OTHERS_EXIT = 1.55f
         private val FINGERS = listOf(
             Lm.INDEX_MCP to Lm.INDEX_TIP,
             Lm.MIDDLE_MCP to Lm.MIDDLE_TIP,

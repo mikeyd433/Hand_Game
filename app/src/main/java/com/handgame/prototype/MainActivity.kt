@@ -95,8 +95,15 @@ class MainActivity : ComponentActivity() {
             initialSettings = initial,
             initialCalibration = store.loadCalibration(initial.frontCamera),
             onHaptic = ::haptic,
-            onCalibrated = { store.saveCalibration(settings.value.frontCamera, it) },
+            onCalibrated = {
+                store.saveCalibration(settings.value.frontCamera, it)
+                // First launch: calibration leads straight into the tutorial room.
+                if (!store.tutorialDone && game.tutorial == null) game.startTutorial()
+            },
         )
+        game.onTutorialFinished = { store.tutorialDone = true }
+        // After the tutorial, the critter friend lives on the table.
+        if (store.tutorialDone) game.spawnFriend()
         game.trackingFpsProvider = { tracker.trackingFps }
 
         hasPermission.value = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
@@ -127,6 +134,9 @@ class MainActivity : ComponentActivity() {
                     onCopySummary = ::copySummary,
                     onCloseResults = { tuning.value = TuningUi() },
                     onPullTargetIn = { game.pullCalibrationTargetIn() },
+                    onSkipLesson = { game.tutorial?.skipLesson() },
+                    onLeaveTutorial = { game.exitTutorial(); store.tutorialDone = true },
+                    onReplayTutorial = { game.startTutorial() },
                 )
             }
         }

@@ -21,6 +21,8 @@ object PlaySpace {
     const val HOVER_HEIGHT = 0.10f
     /** Extra height at full lift. */
     const val MAX_LIFT = 0.38f
+    /** How far below hover height a full dip lowers the palm (the table stops it sooner). */
+    const val DIP_DEPTH = 0.09f
     /** Rendered palm length (wrist → middle knuckle) at hand scale 1. Scaled by [HandLook.scale]. */
     const val HAND_PALM_LENGTH = 0.15f
     /** Joint radius of the rendered fingers, used to keep fingers above the table. */
@@ -40,6 +42,8 @@ class HandPose {
     var fistPoint = Vec3.ZERO
     /** 0..1 lift amount from depth. */
     var lift = 0f
+    /** 0..1 dip below hover height (pushing "into" the screen past the calibrated distance). */
+    var dip = 0f
     /** Smoothed apparent-size ratio vs. calibration (1 = calibrated distance). */
     var sizeRatio = 1f
     /** 0..1: how close the real hand is to leaving the camera's view. */
@@ -159,7 +163,12 @@ class HandRig {
         val closerLifts = !frontCamera xor settings.invertLift
         val distanceRatio = if (closerLifts) ratio else 1f / ratio.coerceAtLeast(1e-3f)
         val rawLift = ((distanceRatio - LIFT_DEAD_ZONE) / liftRange).coerceIn(0f, 1f)
-        val lift = depthFilter.filter(rawLift, t).coerceIn(0f, 1f)
+        // Pushing the other way, past the calibrated distance, dips the hand below its hover
+        // height so fingertips can press things (the table still stops it).
+        val rawDip = ((DIP_START - distanceRatio) / (DIP_RANGE / settings.depthSensitivity.coerceAtLeast(0.1f))).coerceIn(0f, 1f)
+        val depth = depthFilter.filter(rawLift - rawDip, t).coerceIn(-1f, 1f)
+        val lift = depth.coerceAtLeast(0f)
+        val dip = (-depth).coerceAtLeast(0f)
 
         // --- Position ----------------------------------------------------------------------
         val (u, v) = HandMeasure.palmCenterUv(hand, frontCamera)
@@ -180,7 +189,7 @@ class HandRig {
         val overTable = kotlin.math.abs(ground.x) < PlaySpace.TABLE_HALF_X + 0.05f &&
             kotlin.math.abs(ground.z) < PlaySpace.TABLE_HALF_Z + 0.05f
         val floorY = PlaySpace.FINGER_RADIUS * HandLook.scale * 0.8f
-        var height = PlaySpace.HOVER_HEIGHT + lift * PlaySpace.MAX_LIFT
+        var height = PlaySpace.HOVER_HEIGHT + lift * PlaySpace.MAX_LIFT - dip * PlaySpace.DIP_DEPTH
         if (overTable) height = maxOf(height, floorY - lowest)
         val target = floatArrayOf(ground.x, height, ground.z)
         pose.rawTarget = Vec3(target[0], target[1], target[2])
@@ -193,6 +202,7 @@ class HandRig {
 
         pose.palmCenter = center
         pose.lift = lift
+        pose.dip = dip
         pose.sizeRatio = ratio
         pose.rotation = palmRot
         pose.pinchPoint = (joints[Lm.THUMB_TIP] + joints[Lm.INDEX_TIP]) * 0.5f
@@ -316,6 +326,9 @@ class HandRig {
          * above the table without them meaning to lift.
          */
         const val LIFT_DEAD_ZONE = 1.15f
+        /** Dip starts when the hand is this much "into" the screen from its calibrated distance. */
+        const val DIP_START = 0.95f
+        const val DIP_RANGE = 0.18f
         const val MIN_RANGE = 0.07f
         /** Fist thumb guidance starts as the fingers curl below this (open ≈ 1.95) and is full at FIST_GUIDE_FULL. */
         const val FIST_GUIDE_START = 1.55f

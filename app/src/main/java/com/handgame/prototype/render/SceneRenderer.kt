@@ -72,8 +72,10 @@ class SceneRenderer(
     private val entities = ArrayList<Int>()
 
     // Scene objects.
-    private val cubeEntity: Int
-    private val cubeMaterial: MaterialInstance
+    /** One renderable per toy, created the first time the toy is seen. */
+    private class ToyView(val entity: Int, val material: MaterialInstance) { var inScene = false }
+    private val toyViews = HashMap<com.handgame.prototype.game.Toy, ToyView>()
+    private val boxMeshes = HashMap<Vec3, Gpu>()
     private val ringEntity: Int
     private var ringInScene = false
     private val handMaterial: MaterialInstance
@@ -84,6 +86,24 @@ class SceneRenderer(
     private val handCuff: DynamicMesh
     private val handOutline: DynamicMesh
     private val outlinePositions: FloatArray
+
+    // Critter: body/feet and mouth rebuilt each frame, eyes and pupils as spheres, hearts pool.
+    private val critterMeshes = CritterMeshBuilder()
+    private val critterBodyMat: MaterialInstance
+    private val critterBody: DynamicMesh
+    private val critterOutline: DynamicMesh
+    private val critterMouth: DynamicMesh
+    private val critterOutlinePos: FloatArray
+    private val eyeEntities = IntArray(2)
+    private val pupilEntities = IntArray(2)
+    private val heartEntities = IntArray(10)
+    private val heartInScene = BooleanArray(10)
+    private var critterInScene = false
+    private var pupilsInScene = false
+
+    // Push buttons (small pool).
+    private class ButtonView(val base: Int, val cap: Int, val capMat: MaterialInstance) { var inScene = false }
+    private val buttonViews = ArrayList<ButtonView>()
     private val outlineNormals: FloatArray
     private var handInScene = false
 
@@ -164,12 +184,6 @@ class SceneRenderer(
         addDecor(sphereMesh, Vec3(0.70f, -0.55f, 0.75f), 0.18f, floatArrayOf(0.20f, 0.68f, 0.74f))
         addDecor(sphereMesh, Vec3(-0.68f, -0.35f, 0.40f), 0.12f, floatArrayOf(0.95f, 0.42f, 0.68f))
 
-        // Cube.
-        val cubeMesh = upload(
-            MeshFactory.roundedBox(PlaySpace.CUBE_HALF, PlaySpace.CUBE_HALF, PlaySpace.CUBE_HALF, 0.022f),
-        )
-        cubeMaterial = toyInstance(floatArrayOf(0.12f, 0.76f, 0.62f), roughness = 0.35f)
-        cubeEntity = addRenderable(cubeMesh, cubeMaterial, castShadows = true, receiveShadows = true)
 
         // Hand.
         // Target ring for guided tasks (shown only when the game sets a target).
@@ -198,6 +212,34 @@ class SceneRenderer(
         outlinePositions = FloatArray(outlineVerts * 3)
         outlineNormals = FloatArray(outlineVerts * 3)
         handOutline = DynamicMesh(outlineVerts, outlineIndices, outlineMi, castShadows = false, withTangents = false)
+
+        // Critter (topology is fixed, so build once from a stand-in to size the buffers).
+        critterBodyMat = toyInstance(com.handgame.prototype.game.Critter.DEFAULT_COLOR, roughness = 0.4f)
+        critterMeshes.build(com.handgame.prototype.game.Critter(Vec3.ZERO))
+        val cb = critterMeshes.body; val cm = critterMeshes.mouth
+        critterBody = DynamicMesh(cb.vertexCount, cb.indices, critterBodyMat, castShadows = true)
+        critterOutlinePos = FloatArray(cb.positions.size)
+        critterOutline = DynamicMesh(cb.vertexCount, cb.indices, outlineMi, castShadows = false, withTangents = false)
+        critterMouth = DynamicMesh(cm.vertexCount, cm.indices, toyInstance(floatArrayOf(0.16f, 0.07f, 0.22f), 0.6f), castShadows = false)
+        val eyeMat = toyInstance(floatArrayOf(1f, 1f, 1f), roughness = 0.25f)
+        val pupilMat = toyInstance(floatArrayOf(0.1f, 0.05f, 0.15f), roughness = 0.2f)
+        val heartMat = toyInstance(floatArrayOf(1f, 0.45f, 0.65f), roughness = 0.3f).also { it.setParameter("glow", 1f, 0.4f, 0.6f, 0.4f) }
+        for (i in 0 until 2) {
+            eyeEntities[i] = addRenderable(sphereMesh, eyeMat, castShadows = false, addToScene = false)
+            pupilEntities[i] = addRenderable(sphereMesh, pupilMat, castShadows = false, addToScene = false)
+        }
+        for (i in heartEntities.indices) heartEntities[i] = addRenderable(sphereMesh, heartMat, castShadows = false, addToScene = false)
+
+        // Buttons: a soft base puck and a round cap that presses down.
+        val baseMesh = upload(MeshFactory.lathe(listOf(0f to 0f, 1f to 0f, 1.05f to 0.25f, 1f to 0.5f, 0.8f to 0.55f, 0f to 0.55f)))
+        val capMesh = upload(MeshFactory.lathe(listOf(0f to 0f, 0.72f to 0f, 0.75f to 0.4f, 0.65f to 0.85f, 0.35f to 1f, 0f to 1.02f)))
+        for (i in 0 until 2) {
+            val capMat = toyInstance(floatArrayOf(1f, 0.45f, 0.42f), roughness = 0.3f)
+            buttonViews += ButtonView(
+                addRenderable(baseMesh, toyInstance(floatArrayOf(0.95f, 0.92f, 1f), 0.5f), addToScene = false),
+                addRenderable(capMesh, capMat, addToScene = false), capMat,
+            )
+        }
 
         uiHelper.renderCallback = SurfaceCallback()
         uiHelper.attachTo(surfaceView)
@@ -362,13 +404,21 @@ class SceneRenderer(
     }
 
     private fun syncScene() {
-        // Cube, with a gentle pulse and pop when it's within grab range.
-        val cube = game.cube
-        val h = game.highlight
+        // Toys, with a gentle pulse and pop on the one within grab range.
         val pulse = 0.75f + 0.25f * sin(timeSec * 6f)
-        cubeMaterial.setParameter("glow", 1.0f * h * pulse, 0.85f * h * pulse, 0.45f * h * pulse, 0.6f)
-        val s = 1f + 0.04f * h
-        setTransform(cubeEntity, Mat4.trs(mat, cube.position, cube.orientation, s, s, s))
+        val present = game.toys.filter { it.active }.toSet()
+        for ((toy, view) in toyViews) if (view.inScene && toy !in present) { scene.removeEntity(view.entity); view.inScene = false }
+        for (toy in present) {
+            val view = toyViews.getOrPut(toy) { createToyView(toy) }
+            if (!view.inScene) { scene.addEntity(view.entity); view.inScene = true }
+            val h = if (toy === game.highlightToy) game.highlight else 0f
+            view.material.setParameter("glow", 1.0f * h * pulse, 0.85f * h * pulse, 0.45f * h * pulse, 0.6f)
+            val sc = 1f + 0.04f * h
+            setTransform(view.entity, Mat4.trs(mat, toy.body.position, toy.body.orientation, sc, sc, sc))
+        }
+
+        syncCritter()
+        syncButtons()
 
         // Target ring.
         val target = game.target
@@ -409,6 +459,76 @@ class SceneRenderer(
             outlinePositions[nb + i] = cuff.positions[i] + cuff.normals[i] * OUTLINE_WIDTH
         }
         handOutline.update(outlinePositions, null)
+    }
+
+    private fun syncButtons() {
+        for ((i, view) in buttonViews.withIndex()) {
+            val b = game.buttons.getOrNull(i)
+            if ((b != null) != view.inScene) {
+                if (b != null) scene.addEntities(intArrayOf(view.base, view.cap)) else scene.removeEntities(intArrayOf(view.base, view.cap))
+                view.inScene = b != null
+            }
+            if (b == null) continue
+            val baseH = b.height * 0.45f
+            setTransform(view.base, Mat4.trs(mat, b.center, Quat.IDENTITY, b.radius, baseH / 0.55f, b.radius))
+            val capTravel = b.press * com.handgame.prototype.game.PushButton.TRAVEL
+            val capH = b.height - baseH
+            setTransform(view.cap, Mat4.trs(mat, b.center + Vec3(0f, baseH - capTravel, 0f), Quat.IDENTITY, b.radius, capH, b.radius))
+            val pulse = 0.5f + 0.5f * sin(timeSec * 4f)
+            val g = maxOf(b.lit, if (!b.pressed) 0.25f * pulse else 0f)
+            view.capMat.setParameter("glow", 1f * g, 0.6f * g, 0.3f * g, 0.8f)
+        }
+    }
+
+    private fun syncCritter() {
+        val c = game.critter
+        val all = intArrayOf(critterBody.entity, critterOutline.entity, critterMouth.entity, eyeEntities[0], eyeEntities[1])
+        if ((c != null) != critterInScene) {
+            if (c != null) scene.addEntities(all) else scene.removeEntities(all)
+            critterInScene = c != null
+            if (c != null) critterBodyMat.setParameter("baseColor", c.color[0], c.color[1], c.color[2])
+        }
+        if (c == null) {
+            if (pupilsInScene) { scene.removeEntities(pupilEntities); pupilsInScene = false }
+            for (i in heartEntities.indices) if (heartInScene[i]) { scene.removeEntity(heartEntities[i]); heartInScene[i] = false }
+            return
+        }
+        critterMeshes.build(c)
+        val body = critterMeshes.body
+        critterBody.update(body.positions, body.normals)
+        for (i in body.positions.indices) critterOutlinePos[i] = body.positions[i] + body.normals[i] * OUTLINE_WIDTH
+        critterOutline.update(critterOutlinePos, null)
+        critterMouth.update(critterMeshes.mouth.positions, critterMeshes.mouth.normals)
+
+        // Eyes: flattened onto the body, lids closing by squashing them; pupils follow the look.
+        val showPupils = c.eyesClosed < 0.6f
+        if (showPupils != pupilsInScene) {
+            if (showPupils) scene.addEntities(pupilEntities) else scene.removeEntities(pupilEntities)
+            pupilsInScene = showPupils
+        }
+        for ((i, e) in critterMeshes.eyes.withIndex()) {
+            val q = Quat.fromBasis((e.up cross e.normal).normalized(), e.up, e.normal)
+            val r = 0.017f
+            setTransform(eyeEntities[i], Mat4.trs(mat, e.center, q, r, r * (1f - c.eyesClosed * 0.85f), r * 0.7f))
+            if (showPupils) {
+                val side = (e.up cross e.normal).normalized()
+                val p = e.center + e.normal * (r * 0.62f) + side * (c.lookX * 0.006f) + e.up * (c.lookY * 0.006f)
+                setTransform(pupilEntities[i], Mat4.trs(mat, p, q, 0.007f, 0.007f, 0.004f))
+            }
+        }
+        // Hearts: little pink bubbles that rise, swell and shrink.
+        for (i in heartEntities.indices) {
+            val h = c.hearts.getOrNull(i)
+            if ((h != null) != heartInScene[i]) {
+                if (h != null) scene.addEntity(heartEntities[i]) else scene.removeEntity(heartEntities[i])
+                heartInScene[i] = h != null
+            }
+            if (h != null) {
+                val life = h.second / com.handgame.prototype.game.Critter.HEART_LIFE
+                val size = 0.012f * sin(life * 3.1416f).coerceAtLeast(0.05f)
+                setTransform(heartEntities[i], Mat4.trs(mat, h.first, Quat.IDENTITY, size, size, size))
+            }
+        }
     }
 
     /**
@@ -468,6 +588,14 @@ class SceneRenderer(
                 vb.setBufferAt(engine, 1, qb)
             }
         }
+    }
+
+    private fun createToyView(toy: com.handgame.prototype.game.Toy): ToyView {
+        val h = toy.body.halfExtents
+        val mesh = boxMeshes.getOrPut(h) { upload(MeshFactory.roundedBox(h.x, h.y, h.z, minOf(h.x, h.y, h.z) * 0.32f)) }
+        val mi = toyInstance(toy.color, roughness = 0.35f)
+        val e = addRenderable(mesh, mi, castShadows = true, receiveShadows = true, addToScene = false)
+        return ToyView(e, mi)
     }
 
     fun destroy() {
