@@ -16,6 +16,8 @@ data class GameSettings(
     /** Flips which way moving toward/away from the camera lifts. */
     val invertLift: Boolean = false,
     val vibration: Boolean = true,
+    /** Size of the on-screen hand (1 = original prototype size). */
+    val handScale: Float = DEFAULT_HAND_SCALE,
     // One Euro filter parameters (position in world units, depth in 0..1 lift units).
     val posMinCutoff: Float = 1.2f,
     val posBeta: Float = 6.0f,
@@ -24,7 +26,11 @@ data class GameSettings(
     val depthMinCutoff: Float = 0.5f,
     val depthBeta: Float = 1.0f,
     val debugOverlay: Boolean = false,
-)
+) {
+    companion object {
+        const val DEFAULT_HAND_SCALE = 1.35f
+    }
+}
 
 /** Saves settings and calibration in SharedPreferences. */
 class SettingsStore(context: Context) {
@@ -41,6 +47,7 @@ class SettingsStore(context: Context) {
             depthSensitivity = prefs.getFloat("depthSensitivity", d.depthSensitivity),
             invertLift = prefs.getBoolean("invertLift", d.invertLift),
             vibration = prefs.getBoolean("vibration", d.vibration),
+            handScale = prefs.getFloat("handScale", d.handScale),
             posMinCutoff = prefs.getFloat("posMinCutoff", d.posMinCutoff),
             posBeta = prefs.getFloat("posBeta", d.posBeta),
             shapeMinCutoff = prefs.getFloat("shapeMinCutoff", d.shapeMinCutoff),
@@ -59,6 +66,7 @@ class SettingsStore(context: Context) {
             .putFloat("depthSensitivity", s.depthSensitivity)
             .putBoolean("invertLift", s.invertLift)
             .putBoolean("vibration", s.vibration)
+            .putFloat("handScale", s.handScale)
             .putFloat("posMinCutoff", s.posMinCutoff)
             .putFloat("posBeta", s.posBeta)
             .putFloat("shapeMinCutoff", s.shapeMinCutoff)

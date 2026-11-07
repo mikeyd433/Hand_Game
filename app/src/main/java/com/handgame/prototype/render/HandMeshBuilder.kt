@@ -25,6 +25,7 @@ class HandMeshBuilder {
     val cuff = Loft(segments = 20)
 
     fun build(joints: Array<Vec3>, rotation: Quat) {
+        val k = HandLook.scale
         val right = rotation.rotate(Vec3(1f, 0f, 0f))
         val up = rotation.rotate(Vec3.UP)
 
@@ -38,7 +39,7 @@ class HandMeshBuilder {
                 HandLook.jointRadius(mcp + 2), HandLook.jointRadius(mcp + 3),
             )
             // Start a little behind the knuckle so the finger root is buried in the palm.
-            body.tube(pts, radii, up, baseExtend = 0.022f)
+            body.tube(pts, radii, up, baseExtend = 0.022f * k)
         }
         // Thumb: rooted between wrist and its first joint, with a fat pad at the base.
         val thumbRoot = Vec3.lerp(joints[Lm.WRIST], joints[Lm.THUMB_CMC], 0.45f)
@@ -49,7 +50,7 @@ class HandMeshBuilder {
                 HandLook.jointRadius(Lm.THUMB_IP), HandLook.jointRadius(Lm.THUMB_TIP),
             ),
             up,
-            baseExtend = 0.01f,
+            baseExtend = 0.01f * k,
         )
         body.end()
 
@@ -71,7 +72,8 @@ class HandMeshBuilder {
         val knuckles = (j[Lm.INDEX_MCP] + j[Lm.MIDDLE_MCP] + j[Lm.RING_MCP] + j[Lm.PINKY_MCP]) * 0.25f
         val (d, a, b) = palmFrame(j, right)
         val length = wrist.distance(knuckles)
-        val knuckleHalfWidth = j[Lm.INDEX_MCP].distance(j[Lm.PINKY_MCP]) * 0.5f + 0.016f
+        val k = HandLook.scale
+        val knuckleHalfWidth = j[Lm.INDEX_MCP].distance(j[Lm.PINKY_MCP]) * 0.5f + 0.016f * k
         val wristHalfWidth = HandLook.WRIST_HALF_WIDTH
         val p = 3.2f // rounded-rectangle cross-section
 
@@ -81,7 +83,7 @@ class HandMeshBuilder {
         // Wrist-end cap (hidden inside the cuff).
         for (k in CAP_ANGLES.size - 1 downTo 1) {
             val th = CAP_ANGLES[k]
-            body.ring(wrist - d * (0.02f * sin(th)), a, b, halfWidth(0f) * cos(th), halfThick(0f) * cos(th), p)
+            body.ring(wrist - d * (0.02f * k * sin(th)), a, b, halfWidth(0f) * cos(th), halfThick(0f) * cos(th), p)
         }
         for (t in floatArrayOf(0f, 0.3f, 0.6f, 0.85f, 1f)) {
             body.ring(wrist + d * (length * t), a, b, halfWidth(t), halfThick(t), p)
@@ -89,7 +91,7 @@ class HandMeshBuilder {
         // Domed knuckle end.
         for (k in 1 until CAP_ANGLES.size) {
             val th = CAP_ANGLES[k]
-            body.ring(knuckles + d * (0.026f * sin(th)), a, b, halfWidth(1f) * cos(th), halfThick(1f) * cos(th), p)
+            body.ring(knuckles + d * (0.026f * k * sin(th)), a, b, halfWidth(1f) * cos(th), halfThick(1f) * cos(th), p)
         }
     }
 
@@ -98,11 +100,12 @@ class HandMeshBuilder {
         val back = -d
         val bAxis = back cross a
         val wrist = j[Lm.WRIST]
+        val k = HandLook.scale
         val hw = HandLook.WRIST_HALF_WIDTH
         val ht = HandLook.PALM_HALF_THICKNESS * 0.85f
         // (distance behind the wrist, scale) — a rolled lip, closed at the back.
         for ((offset, scale) in CUFF_PROFILE) {
-            cuff.ring(wrist + back * offset, a, bAxis, hw * scale, ht * scale + 0.006f * (scale > 0f).toFloat(), 2.6f)
+            cuff.ring(wrist + back * (offset * k), a, bAxis, hw * scale, ht * scale + 0.006f * k * (scale > 0f).toFloat(), 2.6f)
         }
     }
 

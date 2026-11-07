@@ -70,7 +70,10 @@ class GameController(
     private var calibrationSession: CalibrationSession? =
         if (initialCalibration == null) CalibrationSession() else null
 
-    val rig = HandRig().also { it.applySettings(initialSettings) }
+    val rig = HandRig().also {
+        it.applySettings(initialSettings)
+        HandLook.scale = initialSettings.handScale
+    }
     /** Scene camera, shared with the renderer (which refits it when the screen size changes). */
     val view = ViewRig()
     val gestures = GestureDetector()
@@ -138,6 +141,7 @@ class GameController(
         val cameraChanged = s.frontCamera != settings.frontCamera
         settings = s
         rig.applySettings(s)
+        HandLook.scale = s.handScale
         if (cameraChanged) {
             // A different camera means a different hand pose and distance: recalibrate.
             handednessVoter.reset()
@@ -303,7 +307,7 @@ class GameController(
 
     private fun reachDistance(): Float {
         val p = rig.pose
-        return minOf(cube.distanceTo(p.pinchPoint), cube.distanceTo(p.fistPoint), cube.distanceTo(p.palmCenter) - 0.02f)
+        return minOf(cube.distanceTo(p.pinchPoint), cube.distanceTo(p.fistPoint), cube.distanceTo(p.palmCenter) - 0.02f * HandLook.scale)
     }
 
     private fun updateGrab(fresh: Boolean) {
@@ -356,7 +360,7 @@ class GameController(
         // Settle position: centered between thumb and index, nudged away from the palm (pinch), or
         // resting flat under the palm and slightly toward the fingers (fist).
         heldTargetOffset = if (g == Gesture.FIST) {
-            Vec3(0f, -(HandLook.PALM_HALF_THICKNESS + PlaySpace.CUBE_HALF + 0.004f), -0.03f)
+            Vec3(0f, -(HandLook.PALM_HALF_THICKNESS + PlaySpace.CUBE_HALF + 0.004f), -0.03f * HandLook.scale)
         } else {
             val out = (p.pinchPoint - p.palmCenter).normalized()
             inv.rotate(out * 0.015f)

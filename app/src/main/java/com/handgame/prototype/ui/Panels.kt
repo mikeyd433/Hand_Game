@@ -100,6 +100,10 @@ fun SettingsPanel(
                 else "Now: move your hand away from the camera to lift.",
             )
 
+            LabeledSlider("Hand size", settings.handScale, 0.8f..2.0f) {
+                onChange(settings.copy(handScale = it))
+            }
+
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Vibrate on grab", color = Ink, modifier = Modifier.weight(1f))
                 Switch(checked = settings.vibration, onCheckedChange = { onChange(settings.copy(vibration = it)) })

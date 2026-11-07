@@ -51,7 +51,7 @@ The hand model (`hand_landmarker.task`, about 7.8 MB) is downloaded by Gradle in
 6. **Pause:** take your hand out of view and the game pauses after 0.4 s. Anything you're holding
    is set down. Show your hand again to resume after a short countdown.
 
-The ⚙ button opens settings: camera, playing hand, movement and lift sensitivity, vibration,
+The ⚙ button opens settings: camera, playing hand, movement and lift sensitivity, hand size, vibration,
 recalibrate and reset cube. Debug builds also show a **DBG** button for the developer overlay (camera
 feed with landmark dots, gesture, depth, FPS, tracking confidence) and One Euro smoothing sliders.
 

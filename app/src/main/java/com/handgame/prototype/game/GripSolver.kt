@@ -8,12 +8,19 @@ import kotlin.math.abs
 
 /** Proportions of the rendered cartoon hand, shared by the renderer and the grip solver. */
 object HandLook {
-    const val PALM_HALF_THICKNESS = 0.030f
-    const val WRIST_HALF_WIDTH = 0.040f
-    const val THUMB_PAD_RADIUS = 0.034f
+    /**
+     * Overall size of the drawn hand relative to the original proportions. Set from
+     * [GameSettings.handScale]; everything below (and the hand's shape) scales with it, so
+     * gripping and table contact stay consistent.
+     */
+    @Volatile var scale = GameSettings.DEFAULT_HAND_SCALE
+
+    val PALM_HALF_THICKNESS get() = 0.030f * scale
+    val WRIST_HALF_WIDTH get() = 0.040f * scale
+    val THUMB_PAD_RADIUS get() = 0.034f * scale
 
     /** Finger thickness at each joint: chunky, gently tapering, with soft rounded tips. */
-    fun jointRadius(i: Int): Float = when (i) {
+    fun jointRadius(i: Int): Float = scale * when (i) {
         Lm.WRIST -> 0.034f
         Lm.THUMB_CMC -> 0.029f
         Lm.THUMB_MCP -> 0.026f
@@ -27,6 +34,9 @@ object HandLook {
         Lm.PINKY_PIP -> 0.0195f
         else -> 0.0185f // pinky DIP / tip
     }
+
+    /** Rendered palm length (wrist → middle knuckle). */
+    val palmLength get() = PlaySpace.HAND_PALM_LENGTH * scale
 }
 
 /**

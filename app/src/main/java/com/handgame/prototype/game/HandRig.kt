@@ -21,7 +21,7 @@ object PlaySpace {
     const val HOVER_HEIGHT = 0.10f
     /** Extra height at full lift. */
     const val MAX_LIFT = 0.38f
-    /** Rendered palm length (wrist → middle knuckle). Chunky cartoon proportions. */
+    /** Rendered palm length (wrist → middle knuckle) at hand scale 1. Scaled by [HandLook.scale]. */
     const val HAND_PALM_LENGTH = 0.15f
     /** Joint radius of the rendered fingers, used to keep fingers above the table. */
     const val FINGER_RADIUS = 0.022f
@@ -92,7 +92,7 @@ class HandRig {
     ) {
         // --- Shape -------------------------------------------------------------------------
         HandMeasure.gameShape(hand, frontCamera, rawShape)
-        val scale = PlaySpace.HAND_PALM_LENGTH / cal.worldPalmLength.coerceIn(0.04f, 0.2f)
+        val scale = HandLook.palmLength / cal.worldPalmLength.coerceIn(0.04f, 0.2f)
         for (i in 0 until Lm.COUNT) {
             val p = rawShape[i] * scale
             gestureShape[i] = p
@@ -147,7 +147,7 @@ class HandRig {
         // Keep the hand from sinking into the table top.
         val overTable = kotlin.math.abs(center.x) < PlaySpace.TABLE_HALF_X + 0.05f &&
             kotlin.math.abs(center.z) < PlaySpace.TABLE_HALF_Z + 0.05f
-        val floorY = PlaySpace.FINGER_RADIUS * 0.8f
+        val floorY = PlaySpace.FINGER_RADIUS * HandLook.scale * 0.8f
         if (overTable && minY < floorY) {
             val push = Vec3(0f, floorY - minY, 0f)
             center += push
@@ -161,7 +161,7 @@ class HandRig {
         pose.pinchPoint = (joints[Lm.THUMB_TIP] + joints[Lm.INDEX_TIP]) * 0.5f
         val palmDown = pose.rotation.rotate(Vec3(0f, -1f, 0f))
         val toFingers = (joints[Lm.MIDDLE_MCP] - center) * 0.5f
-        pose.fistPoint = center + toFingers + palmDown * 0.05f
+        pose.fistPoint = center + toFingers + palmDown * (0.05f * HandLook.scale)
     }
 
     private companion object {
