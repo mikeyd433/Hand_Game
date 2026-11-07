@@ -148,7 +148,8 @@ class HandTracker(private val context: Context) {
 
         frameSize = Size(upright.width, upright.height)
         if (debugFrameEnabled) {
-            val w = 160
+            // Large enough for the full-screen calibration view; cheap at this size.
+            val w = 360
             val h = (upright.height * w / upright.width.toFloat()).toInt().coerceAtLeast(1)
             debugFrame.set(Bitmap.createScaledBitmap(upright, w, h, true))
         }

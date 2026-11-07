@@ -126,6 +126,7 @@ class MainActivity : ComponentActivity() {
                     onSaveRecording = ::saveRecording,
                     onCopySummary = ::copySummary,
                     onCloseResults = { tuning.value = TuningUi() },
+                    onPullTargetIn = { game.pullCalibrationTargetIn() },
                 )
             }
         }
@@ -151,11 +152,15 @@ class MainActivity : ComponentActivity() {
         }
         // Push state to Compose at ~20 Hz; the 3D view itself updates every frame.
         uiTimer += dt
-        if (uiTimer >= 0.05f) {
+        // Faster during calibration so the pinch ring follows the fingers over the camera view.
+        if (uiTimer >= (if (game.phase == Phase.CALIBRATING) 0.033f else 0.05f)) {
             uiTimer = 0f
             val withDebug = settings.value.debugOverlay
             ui.value = game.uiSnapshot(withDebug)
-            if (withDebug) debugFrame.value = tracker.debugFrame.get()
+            // Camera frames are only needed for the debug overlay and the calibration view.
+            val calibrating = game.phase == Phase.CALIBRATING
+            tracker.debugFrameEnabled = withDebug || calibrating
+            if (withDebug || calibrating) debugFrame.value = tracker.debugFrame.get()
             trackerError.value = tracker.error
             if (recorder.active) {
                 val step = recorder.currentStep

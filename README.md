@@ -33,16 +33,17 @@ The hand model (`hand_landmarker.task`, about 7.8 MB) is downloaded by Gradle in
 
 ## How to play
 
-1. **Calibrate.** Hold an open hand still at a comfortable distance:
-   - *Front camera:* hold your hand in front of the screen, palm facing it, fingers up.
-   - *Back camera:* reach behind the phone, palm facing away from you, fingers up.
+1. **Calibrate** over the live camera view. This is the only time the camera picture is shown,
+   mirrored for the front camera.
+   - **Frame your hand:** hold an open hand still inside the guide box. *Front camera:* palm toward
+     the screen, fingers up. *Back camera:* reach behind the phone, palm away from you. Hints say
+     if your hand is too close, too far or near an edge.
+   - **Pinch the targets:** a ring follows your pinch point (between thumb and index finger). Move it
+     onto each glowing target and pinch: first the middle, then four corners placed at the edges of
+     the largest area where your whole hand stays in view. Your palm's position at each corner
+     becomes the edge of your play area. **Can't reach** pulls a corner inward; **Skip** keeps a
+     default area.
 
-   Then sweep your hand around the area you want to use, or tap **Skip**.
-
-   The hold only counts while your whole hand has some room inside the camera's view, and a hint says
-   which way to move. Calibration also measures how far your hand reaches on each side of the palm,
-   so the play area keeps your whole hand in view. Holding your hand a little farther from the camera
-   gives more room to move, and therefore less shake.
 2. **Move** your hand to move the on-screen hand. Your comfortable range (from calibration) covers
    the whole screen. It is capped so you can reach every screen edge without your hand leaving the
    camera's view, and a soft glow appears on the screen edge if it starts to. The cube glows when it
@@ -101,7 +102,7 @@ app/src/main/java/com/handgame/prototype/
 │   └── OneEuroFilter.kt   smoothing
 ├── input/
 │   ├── GestureDetector.kt pinch / fist / open with hysteresis + debounce, scaled by palm size
-│   └── Calibration.kt     open-hand baseline + movement-range sweep
+│   └── Calibration.kt     open-hand baseline + pinch-the-targets play area
 ├── game/
 │   ├── HandRig.kt         landmarks → smoothed world pose (X/Z from position, Y from apparent size)
 │   ├── HandSkeleton.kt    rigid hand: angles from landmarks → fixed-length skeleton
@@ -117,7 +118,7 @@ app/src/main/java/com/handgame/prototype/
 │   ├── Materials.kt       toy vinyl material + gradient backdrop (shader source in Kotlin)
 │   └── SceneRenderer.kt   Filament scene, lights, dynamic hand meshes + outline, frame loop
 ├── tuning/                recorder, guided-test script, JSONL format, replay analyzer
-└── ui/                    Compose overlays: calibration, pause, settings, debug, tuning
+└── ui/                    Compose overlays: camera calibration view, pause, settings, debug, tuning
 ```
 
 ### How the mapping works

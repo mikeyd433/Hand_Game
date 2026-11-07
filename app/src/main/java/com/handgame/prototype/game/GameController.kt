@@ -51,6 +51,14 @@ data class GameUi(
     val calibrationStep: CalibrationSession.Step = CalibrationSession.Step.HOLD,
     val calibrationProgress: Float = 0f,
     val calibrationHint: CalibrationSession.Hint = CalibrationSession.Hint.NONE,
+    /** Current calibration target and the player's pinch point (mirrored image coords), if any. */
+    val calibrationTarget: Pair<Float, Float>? = null,
+    val calibrationTargetIndex: Int = 0,
+    val calibrationTargetCount: Int = 0,
+    val calibrationCursor: Pair<Float, Float>? = null,
+    /** Raw landmarks (un-mirrored) for drawing the hand over the camera view during calibration. */
+    val calibrationLandmarks: FloatArray? = null,
+    val frontCamera: Boolean = true,
     val countdown: Int = 0,
     val handFoundFlash: Boolean = false,
     /** 0..1 strength of the "hand is near the edge of the camera's view" glow, and its edge. */
@@ -296,15 +304,27 @@ class GameController(
                 worldPalm = HandMeasure.worldPalmLength(hand),
                 extents = HandMeasure.extents(hand, sample.frontCamera),
                 edgeMargin = HandMeasure.edgeMargin(hand),
+                pinchU = pinchUv(hand, sample.frontCamera).first,
+                pinchV = pinchUv(hand, sample.frontCamera).second,
             )
-            if (session.step == CalibrationSession.Step.MOVE && previousCalStep == CalibrationSession.Step.HOLD) {
-                // Use the fresh baseline right away so the hand moves correctly during the sweep.
+            if (session.step == CalibrationSession.Step.TARGETS && previousCalStep == CalibrationSession.Step.HOLD) {
+                // Use the fresh baseline right away.
                 provisionalFromHold(u, v, size, HandMeasure.worldPalmLength(hand))
             }
             previousCalStep = session.step
             if (done) finishCalibration(session)
         }
     }
+
+    /** Pinch point (between thumb and index tips) in the player's (mirrored) image coordinates. */
+    private fun pinchUv(hand: com.handgame.prototype.tracking.RawHand, front: Boolean): Pair<Float, Float> {
+        val u = (hand.image[Lm.THUMB_TIP * 2] + hand.image[Lm.INDEX_TIP * 2]) / 2
+        val v = (hand.image[Lm.THUMB_TIP * 2 + 1] + hand.image[Lm.INDEX_TIP * 2 + 1]) / 2
+        return Pair(if (front) 1f - u else u, v)
+    }
+
+    /** Pulls the current calibration target toward the middle (when it's hard to reach). */
+    fun pullCalibrationTargetIn() { calibrationSession?.pullTargetIn() }
 
     private fun updateRig(sample: TrackingSample) {
         rig.update(
@@ -618,6 +638,12 @@ class GameController(
             calibrationStep = session?.step ?: CalibrationSession.Step.DONE,
             calibrationProgress = session?.progress ?: 1f,
             calibrationHint = session?.hint ?: CalibrationSession.Hint.NONE,
+            calibrationTarget = session?.target,
+            calibrationTargetIndex = session?.targetIndex ?: 0,
+            calibrationTargetCount = session?.targetCount ?: 0,
+            calibrationCursor = lastSample?.hand?.takeIf { handVisible && phase == Phase.CALIBRATING }?.let { pinchUv(it, lastSample!!.frontCamera) },
+            calibrationLandmarks = if (phase == Phase.CALIBRATING && handVisible) lastSample?.hand?.image else null,
+            frontCamera = settings.frontCamera,
             countdown = if (phase == Phase.RESUMING) kotlin.math.ceil(resumeTimer / (RESUME_SECONDS / 3f)).toInt().coerceIn(1, 3) else 0,
             handFoundFlash = handFoundFlashTimer > 0f,
             edgeWarning = if (handVisible && phase != Phase.CALIBRATING) rig.pose.edgeWarning else 0f,

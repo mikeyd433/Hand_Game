@@ -1,5 +1,6 @@
 package com.handgame.prototype
 
+import com.handgame.prototype.input.Calibration
 import com.handgame.prototype.input.CalibrationSession
 import com.handgame.prototype.input.Gesture
 import com.handgame.prototype.math.Vec3
@@ -52,25 +53,68 @@ class MappingTest {
         assertEquals(1.5f, near / far, 1e-3f)
     }
 
-    @Test fun calibrationRecordsBaselineAndRange() {
+    /** Plays the target step: moves the pinch point onto each target and pinches. */
+    private fun pinchAllTargets(s: CalibrationSession, offU: Float = 0.06f, offV: Float = -0.12f, reach: (Pair<Float, Float>) -> Pair<Float, Float> = { it }) {
+        var guard = 0
+        while (s.step == CalibrationSession.Step.TARGETS && guard++ < 20) {
+            val t = reach(s.target!!)
+            val pu = t.first; val pv = t.second
+            // Palm sits at a fixed offset from the pinch point.
+            s.update(1 / 30f, true, Gesture.OPEN, pu - offU, pv - offV, 0.2f, 0.09f, pinchU = pu, pinchV = pv)
+            s.update(1 / 30f, true, Gesture.PINCH, pu - offU, pv - offV, 0.2f, 0.09f, pinchU = pu, pinchV = pv)
+        }
+    }
+
+    private fun held(): CalibrationSession {
         val s = CalibrationSession()
         var t = 0
         while (s.step == CalibrationSession.Step.HOLD && t < 200) {
-            s.update(1 / 30f, true, Gesture.OPEN, 0.5f, 0.55f, 0.2f, 0.09f); t++
+            s.update(1 / 30f, true, Gesture.OPEN, 0.5f, 0.55f, 0.2f, 0.09f, extents = floatArrayOf(0.2f, 0.12f, 0.2f, 0.15f)); t++
         }
-        assertEquals(CalibrationSession.Step.MOVE, s.step)
-        var done = false
-        var i = 0
-        while (!done && i < 400) {
-            val a = i / 20f
-            done = s.update(1 / 30f, true, Gesture.OPEN, 0.5f + 0.2f * kotlin.math.sin(a), 0.55f + 0.15f * kotlin.math.cos(a), 0.2f, 0.09f)
-            i++
-        }
+        return s
+    }
+
+    @Test fun calibrationTargetsSetThePlayArea() {
+        val s = held()
+        assertEquals(CalibrationSession.Step.TARGETS, s.step)
+        assertEquals(CalibrationSession.CENTER_TARGET, s.target)
+        pinchAllTargets(s)
         val c = assertNotNullAndGet(s.result)
         assertEquals(0.2f, c.baseSize, 1e-4f)
-        assertEquals(0.5f, c.centerU, 1e-4f)
-        assertTrue("range u ${c.rangeU}", c.rangeU in 0.17f..0.21f)
-        assertTrue("range v ${c.rangeV}", c.rangeV in 0.12f..0.16f)
+        // Corner targets sit at the safe-area corners (palm space), so the recorded range spans
+        // most of the room the hand has: u in [0.16, 0.904], v in [0.16, 0.88] before the inset.
+        assertTrue("range u ${c.rangeU}", c.rangeU in 0.28f..0.36f)
+        assertTrue("range v ${c.rangeV}", c.rangeV in 0.26f..0.34f)
+        assertNotNullAndGet(c.extents)
+    }
+
+    @Test fun pinchingAwayFromTheTargetDoesNothing() {
+        val s = held()
+        s.update(1 / 30f, true, Gesture.PINCH, 0.2f, 0.2f, 0.2f, 0.09f, pinchU = 0.2f, pinchV = 0.2f)
+        assertEquals(0, s.targetIndex)
+    }
+
+    @Test fun cantReachPullsTheTargetIn() {
+        val s = held()
+        pinchAllTargets(s, reach = { it }) .also { } // complete normally for comparison
+        val full = assertNotNullAndGet(s.result)
+        val s2 = held()
+        // First (center) target normally, then pull every corner in once before pinching it.
+        var guard = 0
+        while (s2.step == CalibrationSession.Step.TARGETS && guard++ < 20) {
+            if (s2.targetIndex > 0) s2.pullTargetIn()
+            val t = s2.target!!
+            s2.update(1 / 30f, true, Gesture.OPEN, t.first - 0.06f, t.second + 0.12f, 0.2f, 0.09f, pinchU = t.first, pinchV = t.second)
+            s2.update(1 / 30f, true, Gesture.PINCH, t.first - 0.06f, t.second + 0.12f, 0.2f, 0.09f, pinchU = t.first, pinchV = t.second)
+        }
+        val pulled = assertNotNullAndGet(s2.result)
+        assertTrue(pulled.rangeU < full.rangeU && pulled.rangeV < full.rangeV)
+    }
+
+    @Test fun skippingTargetsKeepsDefaults() {
+        val s = held()
+        assertTrue(s.skipMove())
+        assertEquals(Calibration.DEFAULT_RANGE_U, s.result!!.rangeU, 1e-6f)
     }
 
     @Test fun calibrationHoldRestartsWhenHandMoves() {

@@ -76,6 +76,7 @@ fun GameScreen(
     onSaveRecording: () -> Unit = {},
     onCopySummary: () -> Unit = {},
     onCloseResults: () -> Unit = {},
+    onPullTargetIn: () -> Unit = {},
 ) {
     var showSettings by remember { mutableStateOf(false) }
 
@@ -87,6 +88,8 @@ fun GameScreen(
             )
 
             EdgeGlow(ui.edgeWarning, ui.edgeX, ui.edgeY)
+
+            if (ui.phase == Phase.CALIBRATING) CalibrationView(ui, debugFrame, onSkipRange, onPullTargetIn)
 
             Box(Modifier.fillMaxSize().systemBarsPadding()) {
                 // Top bar.
@@ -114,7 +117,7 @@ fun GameScreen(
                 }
 
                 if (tuning.mode != TuningMode.GUIDED) when (ui.phase) {
-                    Phase.CALIBRATING -> CalibrationOverlay(ui, frontCamera, onSkipRange, Modifier.align(Alignment.BottomCenter))
+                    Phase.CALIBRATING -> Unit // full-screen camera view, drawn below
                     Phase.PAUSED -> PausedOverlay(frontCamera, Modifier.align(Alignment.Center))
                     Phase.RESUMING -> ResumeOverlay(ui, Modifier.align(Alignment.Center))
                     Phase.PLAYING -> Unit
@@ -194,58 +197,6 @@ private fun Card(modifier: Modifier = Modifier, content: @Composable () -> Unit)
             .padding(horizontal = 24.dp, vertical = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) { content() }
-}
-
-@Composable
-private fun CalibrationOverlay(ui: GameUi, frontCamera: Boolean, onSkipRange: () -> Unit, modifier: Modifier) {
-    Card(modifier) {
-        when (ui.calibrationStep) {
-            CalibrationSession.Step.HOLD -> {
-                Text("Let's meet your hand", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    if (frontCamera) {
-                        "Hold your open hand up in front of the screen, palm facing it, fingers up, at a comfortable distance. Keep it still."
-                    } else {
-                        "Reach behind the phone and hold your open hand up, palm facing away from you, fingers up, at a comfortable distance. Keep it still."
-                    },
-                    color = Ink, textAlign = TextAlign.Center,
-                )
-            }
-            else -> {
-                Text("Now explore", color = Ink, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Move your hand slowly around the whole area you'd like to play in: left, right, up and down.",
-                    color = Ink, textAlign = TextAlign.Center,
-                )
-            }
-        }
-        val hint = when (ui.calibrationHint) {
-            CalibrationSession.Hint.NEAR_EDGE -> "Your hand is near the edge of the camera's view. Move it toward the middle (usually a little higher)."
-            CalibrationSession.Hint.TOO_CLOSE -> "Tip: a little farther from the camera gives you more room to move."
-            CalibrationSession.Hint.NONE -> null
-        }
-        if (hint != null && ui.calibrationStep == CalibrationSession.Step.HOLD) {
-            Spacer(Modifier.height(8.dp))
-            Text(hint, color = Color(0xFFB0406A), textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold)
-        }
-        Spacer(Modifier.height(16.dp))
-        Box(contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(
-                progress = { ui.calibrationProgress },
-                modifier = Modifier.size(56.dp),
-                color = Accent,
-                trackColor = Color(0x228C7BD8),
-                strokeWidth = 6.dp,
-            )
-            Text("${(ui.calibrationProgress * 100).toInt()}%", color = Ink, fontSize = 12.sp)
-        }
-        if (ui.calibrationStep == CalibrationSession.Step.MOVE) {
-            Spacer(Modifier.height(8.dp))
-            TextButton(onClick = onSkipRange) { Text("Skip, use default range") }
-        }
-    }
 }
 
 @Composable

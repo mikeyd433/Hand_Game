@@ -320,14 +320,14 @@ class HandRig {
         /** Fist thumb guidance starts as the fingers curl below this (open ≈ 1.95) and is full at FIST_GUIDE_FULL. */
         const val FIST_GUIDE_START = 1.55f
         const val FIST_GUIDE_FULL = 1.15f
-        const val EDGE_MARGIN = 0f
+        const val EDGE_MARGIN = Calibration.EDGE_MARGIN
         /**
          * Share of the measured open-hand reach that must stay inside the frame. Below 1 because
          * MediaPipe keeps tracking with the thumb or fingertips a little out of frame (a guided
          * recording ranged well past the full-reach limit with zero dropouts), and every bit of
          * extra room lowers the gain, and so the shake.
          */
-        const val EXTENT_SLACK = 0.8f
+        const val EXTENT_SLACK = Calibration.EXTENT_SLACK
         /** The play box spans at least this share of the safe region, whatever the sweep was. */
         const val MIN_SAFE_SHARE = 0.75f
         /** Start warning when a landmark is this close (normalized) to the frame edge. */

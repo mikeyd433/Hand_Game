@@ -98,6 +98,31 @@ class GameControllerTest {
         assertFalse(game.holding)
     }
 
+    @Test fun calibrationByPinchingTargets() {
+        assertEquals(Phase.CALIBRATING, game.phase)
+        play(2.0f) { SyntheticHand.hand(Gesture.OPEN) }
+        val ui0 = game.uiSnapshot(false)
+        assertEquals(com.handgame.prototype.input.CalibrationSession.Step.TARGETS, ui0.calibrationStep)
+        assertTrue("camera-view cursor is reported", ui0.calibrationCursor != null && ui0.calibrationLandmarks != null)
+        // Where the pinch point sits relative to the palm, in the player's mirrored view.
+        val probe = SyntheticHand.hand(Gesture.PINCH)
+        val palm = com.handgame.prototype.tracking.HandMeasure.palmCenterUv(probe, true)
+        val pinch = Pair(1f - (probe.image[4 * 2] + probe.image[8 * 2]) / 2, (probe.image[4 * 2 + 1] + probe.image[8 * 2 + 1]) / 2)
+        var guard = 0
+        while (game.phase == Phase.CALIBRATING && guard++ < 10) {
+            val t = game.uiSnapshot(false).calibrationTarget ?: break
+            // Raw (un-mirrored) palm u that puts the pinch point on the target.
+            val u = 1f - (t.first - (pinch.first - palm.first))
+            val v = t.second - (pinch.second - palm.second)
+            play(0.3f) { SyntheticHand.hand(Gesture.OPEN, u = u, v = v) }
+            play(0.3f) { SyntheticHand.hand(Gesture.PINCH, u = u, v = v) }
+        }
+        assertEquals("all five targets pinched", Phase.RESUMING, game.phase)
+        val c = game.calibration
+        assertTrue("play area spans a good part of the view: ${c.rangeU} × ${c.rangeV}", c.rangeU > 0.12f && c.rangeV > 0.1f)
+        assertTrue(c.extents != null)
+    }
+
     @Test fun switchingCameraForcesRecalibration() {
         calibrate()
         game.updateSettings(game.settings.copy(frontCamera = false))
