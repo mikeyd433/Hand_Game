@@ -20,8 +20,11 @@ data class GestureThresholds(
     val exitFrames: Int = 2,
 )
 
-/** Raw per-frame measurements, exposed for the debug overlay. */
-data class GestureMetrics(val pinchDistance: Float, val maxCurl: Float)
+/**
+ * Raw per-frame measurements, exposed for the debug overlay and tuning reports.
+ * [pinchDistance] is the effective value used for detection; [pinch3d] / [pinch2d] are its inputs.
+ */
+data class GestureMetrics(val pinchDistance: Float, val maxCurl: Float, val pinch3d: Float = pinchDistance, val pinch2d: Float = Float.NaN)
 
 /**
  * Detects OPEN / PINCH / FIST from 21 hand landmarks. Uses hysteresis (separate enter and exit
@@ -43,9 +46,17 @@ class GestureDetector(var thresholds: GestureThresholds = GestureThresholds()) {
         candidateFrames = 0
     }
 
-    fun update(joints: Array<Vec3>): Gesture {
+    /**
+     * @param pinch2d thumb-to-index distance measured flat in the camera image, relative to the
+     *   hand's apparent size (see [com.handgame.prototype.tracking.HandMeasure.imagePinch]).
+     *   MediaPipe's 3D depth for two touching fingertips seen face-on is often off by a lot, so a
+     *   pinch that clearly overlaps in the image counts too, as long as the 3D distance agrees the
+     *   fingers are at least fairly close.
+     */
+    fun update(joints: Array<Vec3>, pinch2d: Float = Float.NaN): Gesture {
         val palm = joints[Lm.WRIST].distance(joints[Lm.MIDDLE_MCP]).coerceAtLeast(1e-4f)
-        val pinch = joints[Lm.THUMB_TIP].distance(joints[Lm.INDEX_TIP]) / palm
+        val pinch3d = joints[Lm.THUMB_TIP].distance(joints[Lm.INDEX_TIP]) / palm
+        val pinch = if (!pinch2d.isNaN() && pinch3d < PINCH_3D_GUARD) minOf(pinch3d, pinch2d * PINCH_2D_SCALE) else pinch3d
 
         var maxCurl = 0f
         for ((mcp, tip) in FINGERS) {
@@ -53,7 +64,7 @@ class GestureDetector(var thresholds: GestureThresholds = GestureThresholds()) {
                 joints[mcp].distance(joints[Lm.WRIST]).coerceAtLeast(1e-4f)
             if (ratio > maxCurl) maxCurl = ratio
         }
-        metrics = GestureMetrics(pinch, maxCurl)
+        metrics = GestureMetrics(pinch, maxCurl, pinch3d, pinch2d)
 
         val t = thresholds
         // Instantaneous classification, with the current state widening its own band (hysteresis).
@@ -79,8 +90,13 @@ class GestureDetector(var thresholds: GestureThresholds = GestureThresholds()) {
         return state
     }
 
-    private companion object {
-        val FINGERS = listOf(
+    companion object {
+        /** 2D pinch is ~half the 3D value for the same finger gap; this puts both on one scale. */
+        const val PINCH_2D_SCALE = 2.0f
+        /** The 2D pinch only counts when the 3D estimate is at least this close (rules out a thumb
+         *  that merely crosses in front of the index finger in the camera's view). */
+        const val PINCH_3D_GUARD = 0.75f
+        private val FINGERS = listOf(
             Lm.INDEX_MCP to Lm.INDEX_TIP,
             Lm.MIDDLE_MCP to Lm.MIDDLE_TIP,
             Lm.RING_MCP to Lm.RING_TIP,

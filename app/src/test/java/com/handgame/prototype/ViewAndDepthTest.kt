@@ -29,8 +29,9 @@ class ViewAndDepthTest {
     }
 
     @Test fun frontCameraLiftsWhenPullingBackFromTheScreen() {
-        assertTrue(liftAfter(front = true, scale = 1.7f) > 0.8f)  // farther → up
+        assertTrue(liftAfter(front = true, scale = 1.55f) > 0.8f)  // farther → up
         assertEquals(0f, liftAfter(front = true, scale = 3.8f), 1e-3f) // closer → stays down
+        assertEquals("small drift doesn't lift", 0f, liftAfter(front = true, scale = 2.25f), 1e-3f)
     }
 
     @Test fun backCameraLiftsWhenBringingTheHandBackToThePhone() {

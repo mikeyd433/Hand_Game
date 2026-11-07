@@ -88,6 +88,42 @@ object HandMeasure {
         return 0.5f * (length + width2)
     }
 
+    /**
+     * How far the hand's landmarks reach from the palm center, in the player's (mirrored) view:
+     * [left, right, up, down] in normalized image units. Used to keep the whole hand in frame.
+     */
+    fun extents(hand: RawHand, frontCamera: Boolean): FloatArray {
+        val (pu, pv) = palmCenterUv(hand, frontCamera)
+        var minU = 1f; var maxU = 0f; var minV = 1f; var maxV = 0f
+        for (i in 0 until Lm.COUNT) {
+            val u = if (frontCamera) 1f - hand.image[i * 2] else hand.image[i * 2]
+            val v = hand.image[i * 2 + 1]
+            minU = minOf(minU, u); maxU = maxOf(maxU, u); minV = minOf(minV, v); maxV = maxOf(maxV, v)
+        }
+        return floatArrayOf(pu - minU, maxU - pu, pv - minV, maxV - pv)
+    }
+
+    /**
+     * Thumb-tip to index-tip distance in the camera image (pixels), relative to the same
+     * apparent hand size used for depth, so it's comparable across distances.
+     */
+    fun imagePinch(hand: RawHand, width: Int, height: Int): Float {
+        fun px(i: Int) = Pair(hand.image[i * 2] * width, hand.image[i * 2 + 1] * height)
+        fun d(a: Int, b: Int): Float { val (ax, ay) = px(a); val (bx, by) = px(b); return hypot(ax - bx, ay - by) }
+        val size = 0.5f * (d(Lm.WRIST, Lm.MIDDLE_MCP) + 1.25f * d(Lm.INDEX_MCP, Lm.PINKY_MCP))
+        return d(Lm.THUMB_TIP, Lm.INDEX_TIP) / size.coerceAtLeast(1e-3f)
+    }
+
+    /** Smallest distance from any landmark to the edge of the camera image. */
+    fun edgeMargin(hand: RawHand): Float {
+        var m = 1f
+        for (i in 0 until Lm.COUNT) {
+            val u = hand.image[i * 2]; val v = hand.image[i * 2 + 1]
+            m = minOf(m, u, 1f - u, v, 1f - v)
+        }
+        return m
+    }
+
     /** Metric palm length (wrist → middle knuckle) from world landmarks. */
     fun worldPalmLength(hand: RawHand): Float = worldPoint(hand, Lm.WRIST).distance(worldPoint(hand, Lm.MIDDLE_MCP))
 

@@ -28,6 +28,7 @@ import kotlin.math.abs
 class TuningAnalyzer(
     private val settingsOverride: ((GameSettings) -> GameSettings)? = null,
     private val thresholds: GestureThresholds = GestureThresholds(),
+    private val calibrationOverride: ((Calibration) -> Calibration)? = null,
 ) {
     /** One replayed tracking sample. */
     class Frame(
@@ -165,7 +166,7 @@ class TuningAnalyzer(
             when (e) {
                 is Recording.Config -> {
                     settings = settingsOverride?.invoke(e.settings) ?: e.settings
-                    calibration = e.calibration
+                    calibration = calibrationOverride?.invoke(e.calibration) ?: e.calibration
                     rig.applySettings(settings)
                     com.handgame.prototype.game.HandLook.scale = settings.handScale
                 }
@@ -183,7 +184,7 @@ class TuningAnalyzer(
                         HandednessSetting.AUTO -> voted != Handedness.LEFT
                     }
                     rig.update(hand, e.frontCamera, e.imageWidth, e.imageHeight, cal, settings, right, view, e.t)
-                    val g = gestures.update(rig.gestureShape)
+                    val g = gestures.update(rig.gestureShape, rig.pinch2d)
                     val p = rig.pose
                     frames += Frame(
                         e.t, true, p.palmCenter, p.joints[Lm.INDEX_TIP], p.rawTarget, g,

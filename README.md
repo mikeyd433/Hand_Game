@@ -38,6 +38,11 @@ The hand model (`hand_landmarker.task`, about 7.8 MB) is downloaded by Gradle in
    - *Back camera:* reach behind the phone, palm facing away from you, fingers up.
 
    Then sweep your hand around the area you want to use, or tap **Skip**.
+
+   The hold only counts while your whole hand has some room inside the camera's view, and a hint says
+   which way to move. Calibration also measures how far your hand reaches on each side of the palm,
+   so the play area keeps your whole hand in view. Holding your hand a little farther from the camera
+   gives more room to move, and therefore less shake.
 2. **Move** your hand to move the on-screen hand. Your comfortable range (from calibration) covers
    the whole screen. It is capped so you can reach every screen edge without your hand leaving the
    camera's view, and a soft glow appears on the screen edge if it starts to. The cube glows when it

@@ -48,3 +48,27 @@ class GestureDetectorTest {
         repeat(5) { assertEquals(Gesture.PINCH, d.update(j)) }
     }
 }
+
+/** Pinches MediaPipe gets wrong in depth (seen in a real recording) are caught via the image. */
+class ImagePinchTest {
+    @Test fun imageOverlapRescuesADepthConfusedPinch() {
+        val d = GestureDetector()
+        val j = Array(Lm.COUNT) { Vec3.ZERO }
+        HandMeasure.gameShape(SyntheticHand.hand(Gesture.PINCH), frontCamera = true, out = j)
+        // Push the index tip away in depth only: 3D says ~0.45 apart, the image says touching.
+        val palm = j[Lm.WRIST].distance(j[Lm.MIDDLE_MCP])
+        j[Lm.INDEX_TIP] = j[Lm.THUMB_TIP] + Vec3(0f, 0.45f * palm, 0f)
+        repeat(3) { d.update(j) }
+        assertEquals("3D alone misses it", Gesture.OPEN, d.state)
+        repeat(3) { d.update(j, pinch2d = 0.1f) }
+        assertEquals(Gesture.PINCH, d.state)
+    }
+
+    @Test fun imageOverlapAloneDoesNotTriggerWhenFingersAreFarApart() {
+        val d = GestureDetector()
+        val j = Array(Lm.COUNT) { Vec3.ZERO }
+        HandMeasure.gameShape(SyntheticHand.hand(Gesture.OPEN), frontCamera = true, out = j)
+        repeat(5) { d.update(j, pinch2d = 0.05f) } // thumb crossing in front of the index in view
+        assertEquals(Gesture.OPEN, d.state)
+    }
+}

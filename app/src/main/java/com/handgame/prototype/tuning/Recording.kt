@@ -114,11 +114,13 @@ class Recording(val header: Map<String, Any?>, val events: List<Event>) {
         fun calToMap(c: Calibration): Map<String, Any?> = linkedMapOf(
             "baseSize" to c.baseSize, "centerU" to c.centerU, "centerV" to c.centerV,
             "rangeU" to c.rangeU, "rangeV" to c.rangeV, "worldPalm" to c.worldPalmLength,
+            "ext" to c.extents,
         )
 
         fun calFromMap(m: Map<String, Any?>) = Calibration(
             m.num("baseSize").toFloat(), m.num("centerU").toFloat(), m.num("centerV").toFloat(),
             m.num("rangeU").toFloat(), m.num("rangeV").toFloat(), m.num("worldPalm").toFloat(),
+            (m["ext"] as? List<*>)?.map { (it as Double).toFloat() },
         )
     }
 }

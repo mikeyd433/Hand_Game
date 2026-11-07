@@ -72,7 +72,9 @@ class HandSkeletonTest {
     @Test fun screenEdgeIsReachedBeforeTheHandLeavesTheCamera() {
         // A calibration centered high in the frame: reaching the top of the screen must not need
         // the fingers to go past the top of the camera image.
-        val cal = GameController.DEFAULT_CALIBRATION.copy(centerV = 0.38f, rangeV = 0.3f)
+        // Calibrated like the app does: including the open hand's measured reach.
+        val reach = com.handgame.prototype.tracking.HandMeasure.extents(SyntheticHand.hand(Gesture.OPEN), true).toList()
+        val cal = GameController.DEFAULT_CALIBRATION.copy(centerV = 0.38f, rangeV = 0.3f, extents = reach)
         val rig = HandRig(); val s = GameSettings(); rig.applySettings(s)
         val view = ViewRig()
         var reachedTop = Float.NaN

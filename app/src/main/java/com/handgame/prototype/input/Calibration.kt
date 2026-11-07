@@ -18,11 +18,20 @@ data class Calibration(
     val rangeU: Float,
     val rangeV: Float,
     val worldPalmLength: Float,
+    /**
+     * Measured reach of the open hand from its palm center [left, right, up, down] (normalized
+     * image units, player's view), or null for calibrations made before this was recorded.
+     */
+    val extents: List<Float>? = null,
 ) {
     companion object {
         const val DEFAULT_RANGE_U = 0.24f
         const val DEFAULT_RANGE_V = 0.20f
         const val MIN_RANGE = 0.10f
+        /** Hold only counts when every landmark is at least this far from the frame edge. */
+        const val MIN_EDGE_MARGIN = 0.06f
+        /** Apparent size above which we suggest holding the hand a bit farther away. */
+        const val TOO_CLOSE_SIZE = 0.30f
     }
 }
 
@@ -38,6 +47,9 @@ class CalibrationSession(
 ) {
     enum class Step { HOLD, MOVE, DONE }
 
+    /** Why the hold isn't progressing, for on-screen hints. */
+    enum class Hint { NONE, NEAR_EDGE, TOO_CLOSE }
+
     var step = Step.HOLD
         private set
     /** 0..1 progress of the current step. */
@@ -45,6 +57,9 @@ class CalibrationSession(
         private set
     var result: Calibration? = null
         private set
+    var hint = Hint.NONE
+        private set
+    private val sumExt = FloatArray(4)
 
     private var holdTime = 0f
     private var sumSize = 0f; private var sumU = 0f; private var sumV = 0f; private var sumPalm = 0f
@@ -67,18 +82,30 @@ class CalibrationSession(
         v: Float,
         size: Float,
         worldPalm: Float,
+        extents: FloatArray? = null,
+        edgeMargin: Float = 1f,
     ): Boolean {
         when (step) {
             Step.HOLD -> {
                 val still = !lastU.isNaN() && abs(u - lastU) + abs(v - lastV) < 0.02f
                 lastU = u; lastV = v
-                if (!handPresent || gesture != Gesture.OPEN || !still) {
+                // The whole hand must sit comfortably inside the camera's view, or the play range
+                // would end up cramped on one side.
+                val roomy = edgeMargin >= Calibration.MIN_EDGE_MARGIN
+                hint = when {
+                    !handPresent -> Hint.NONE
+                    !roomy -> Hint.NEAR_EDGE
+                    size > Calibration.TOO_CLOSE_SIZE -> Hint.TOO_CLOSE
+                    else -> Hint.NONE
+                }
+                if (!handPresent || gesture != Gesture.OPEN || !still || !roomy) {
                     resetHold()
                     if (handPresent && gesture == Gesture.OPEN) { lastU = u; lastV = v }
                     return false
                 }
                 holdTime += dt
                 sumSize += size; sumU += u; sumV += v; sumPalm += worldPalm; samples++
+                if (extents != null) for (k in 0 until 4) sumExt[k] += extents[k]
                 progress = (holdTime / holdSeconds).coerceIn(0f, 1f)
                 if (holdTime >= holdSeconds && samples > 0) {
                     step = Step.MOVE
@@ -111,6 +138,7 @@ class CalibrationSession(
     private fun resetHold() {
         holdTime = 0f; progress = 0f
         sumSize = 0f; sumU = 0f; sumV = 0f; sumPalm = 0f; samples = 0
+        sumExt.fill(0f)
         lastU = Float.NaN; lastV = Float.NaN
     }
 
@@ -133,6 +161,7 @@ class CalibrationSession(
             rangeU = ru,
             rangeV = rv,
             worldPalmLength = sumPalm / samples,
+            extents = if (sumExt.all { it > 0f }) sumExt.map { it / samples } else null,
         )
         step = Step.DONE
         progress = 1f

@@ -43,6 +43,7 @@ data class GameUi(
     val phase: Phase = Phase.CALIBRATING,
     val calibrationStep: CalibrationSession.Step = CalibrationSession.Step.HOLD,
     val calibrationProgress: Float = 0f,
+    val calibrationHint: CalibrationSession.Hint = CalibrationSession.Hint.NONE,
     val countdown: Int = 0,
     val handFoundFlash: Boolean = false,
     /** 0..1 strength of the "hand is near the edge of the camera's view" glow, and its edge. */
@@ -68,11 +69,14 @@ class GameController(
     var calibration: Calibration = initialCalibration ?: DEFAULT_CALIBRATION
         private set
 
-    var phase: Phase = if (initialCalibration == null) Phase.CALIBRATING else Phase.PAUSED
+    /** Calibrations from older builds lack the measured hand reach, so ask for a fresh one. */
+    private val needsCalibration = initialCalibration?.extents == null
+
+    var phase: Phase = if (needsCalibration) Phase.CALIBRATING else Phase.PAUSED
         private set
 
     private var calibrationSession: CalibrationSession? =
-        if (initialCalibration == null) CalibrationSession() else null
+        if (needsCalibration) CalibrationSession() else null
 
     val rig = HandRig().also {
         it.applySettings(initialSettings)
@@ -218,7 +222,7 @@ class GameController(
 
         val t = timeSec
         updateRig(sample)
-        gestures.update(rig.gestureShape)
+        gestures.update(rig.gestureShape, rig.pinch2d)
 
         anchorHistory.addLast(t to currentAnchor())
         while (anchorHistory.size > 12) anchorHistory.removeFirst()
@@ -233,6 +237,8 @@ class GameController(
                 gesture = gestures.state,
                 u = u, v = v, size = size,
                 worldPalm = HandMeasure.worldPalmLength(hand),
+                extents = HandMeasure.extents(hand, sample.frontCamera),
+                edgeMargin = HandMeasure.edgeMargin(hand),
             )
             if (session.step == CalibrationSession.Step.MOVE && previousCalStep == CalibrationSession.Step.HOLD) {
                 // Use the fresh baseline right away so the hand moves correctly during the sweep.
@@ -319,7 +325,19 @@ class GameController(
 
     private fun reachDistance(): Float {
         val p = rig.pose
-        return minOf(cube.distanceTo(p.pinchPoint), cube.distanceTo(p.fistPoint), cube.distanceTo(p.palmCenter) - 0.02f * HandLook.scale)
+        val contact = minOf(cube.distanceTo(p.pinchPoint), cube.distanceTo(p.fistPoint), cube.distanceTo(p.palmCenter) - 0.02f * HandLook.scale)
+        // The view is mostly top-down, where height is hard to judge. Count the hand as in reach
+        // when it's over the cube on screen and not too far above it.
+        return minOf(contact, overheadDistance(p.pinchPoint), overheadDistance(p.fistPoint))
+    }
+
+    /** Horizontal distance from [point] to the cube's footprint, if [point] is within reach above it. */
+    private fun overheadDistance(point: Vec3): Float {
+        val top = cube.position.y + PlaySpace.CUBE_HALF
+        val above = point.y - top
+        if (above < -PlaySpace.CUBE_HALF || above > OVERHEAD_REACH) return Float.MAX_VALUE
+        val flat = Vec3(point.x, cube.position.y, point.z)
+        return cube.distanceTo(flat)
     }
 
     private fun updateGrab(fresh: Boolean) {
@@ -513,6 +531,7 @@ class GameController(
             phase = phase,
             calibrationStep = session?.step ?: CalibrationSession.Step.DONE,
             calibrationProgress = session?.progress ?: 1f,
+            calibrationHint = session?.hint ?: CalibrationSession.Hint.NONE,
             countdown = if (phase == Phase.RESUMING) kotlin.math.ceil(resumeTimer / (RESUME_SECONDS / 3f)).toInt().coerceIn(1, 3) else 0,
             handFoundFlash = handFoundFlashTimer > 0f,
             edgeWarning = if (handVisible && phase != Phase.CALIBRATING) rig.pose.edgeWarning else 0f,
@@ -527,6 +546,8 @@ class GameController(
         const val HAND_LOSS_GRACE = 0.4
         const val RESUME_SECONDS = 1.2f
         const val GRAB_RANGE = 0.06f
+        /** How far above the cube a grab still reaches (see [overheadDistance]). */
+        const val OVERHEAD_REACH = 0.20f
         const val THROW_GAIN = 1.15f
         const val THROW_MIN_SPEED = 0.35f
         const val THROW_MAX_SPEED = 6f

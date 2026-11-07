@@ -221,6 +221,15 @@ private fun CalibrationOverlay(ui: GameUi, frontCamera: Boolean, onSkipRange: ()
                 )
             }
         }
+        val hint = when (ui.calibrationHint) {
+            CalibrationSession.Hint.NEAR_EDGE -> "Your hand is near the edge of the camera's view. Move it toward the middle (usually a little higher)."
+            CalibrationSession.Hint.TOO_CLOSE -> "Tip: a little farther from the camera gives you more room to move."
+            CalibrationSession.Hint.NONE -> null
+        }
+        if (hint != null && ui.calibrationStep == CalibrationSession.Step.HOLD) {
+            Spacer(Modifier.height(8.dp))
+            Text(hint, color = Color(0xFFB0406A), textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold)
+        }
         Spacer(Modifier.height(16.dp))
         Box(contentAlignment = Alignment.Center) {
             CircularProgressIndicator(

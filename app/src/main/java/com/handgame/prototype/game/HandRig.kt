@@ -76,6 +76,9 @@ class HandRig {
 
     /** The latest unsmoothed shape (scaled to world size), used for gesture detection. */
     val gestureShape = Array(Lm.COUNT) { Vec3.ZERO }
+    /** Latest thumb–index distance measured in the camera image (see [HandMeasure.imagePinch]). */
+    var pinch2d = Float.NaN
+        private set
 
     fun applySettings(s: GameSettings) {
         positionFilter.setParams(s.posMinCutoff, s.posBeta, 1f)
@@ -107,6 +110,7 @@ class HandRig {
         HandMeasure.gameShape(hand, frontCamera, rawShape)
         val scale = HandLook.palmLength / cal.worldPalmLength.coerceIn(0.04f, 0.2f)
         for (i in 0 until Lm.COUNT) gestureShape[i] = rawShape[i] * scale
+        pinch2d = HandMeasure.imagePinch(hand, imageWidth, imageHeight)
 
         // The skeleton's conventions flip with handedness, so start its filters fresh on a flip.
         if (lastRightHand != rightHand) { angleFilter.reset(); palmFilter.reset(); lastRightHand = rightHand }
@@ -144,16 +148,14 @@ class HandRig {
         val liftRange = 0.45f / settings.depthSensitivity.coerceAtLeast(0.1f)
         val closerLifts = !frontCamera xor settings.invertLift
         val distanceRatio = if (closerLifts) ratio else 1f / ratio.coerceAtLeast(1e-3f)
-        val rawLift = ((distanceRatio - 1.05f) / liftRange).coerceIn(0f, 1f)
+        val rawLift = ((distanceRatio - LIFT_DEAD_ZONE) / liftRange).coerceIn(0f, 1f)
         val lift = depthFilter.filter(rawLift, t).coerceIn(0f, 1f)
 
         // --- Position ----------------------------------------------------------------------
         val (u, v) = HandMeasure.palmCenterUv(hand, frontCamera)
-        val sens = settings.sensitivity.coerceAtLeast(0.1f)
-        val range = safeRange(cal, imageWidth, imageHeight)
-        val du = u - cal.centerU; val dv = v - cal.centerV
-        val nx = (du / (if (du < 0f) range[0] else range[1]) * sens).coerceIn(-1f, 1f)
-        val ny = (dv / (if (dv < 0f) range[2] else range[3]) * sens).coerceIn(-1f, 1f)
+        val box = playBox(cal, imageWidth, imageHeight, settings.sensitivity)
+        val nx = ((u - box[0]) / box[1]).coerceIn(-1f, 1f)
+        val ny = ((v - box[2]) / box[3]).coerceIn(-1f, 1f)
         updateEdgeWarning(hand, frontCamera)
         // The comfortable range covers the whole screen: map it to screen coordinates, then find
         // the matching spot at hover height. Lifting then goes straight up from there.
@@ -190,25 +192,45 @@ class HandRig {
     }
 
     /**
-     * Movement half-ranges [left, right, up, down] in normalized image units. Starts from the
-     * calibrated range (shrunk a little so the screen edges need less reach), then is capped so
-     * that reaching any screen edge never needs the hand to leave the camera's view. The hand's
-     * extent comes from the calibrated size, so the cap is stable frame to frame.
+     * The stretch of the camera image the palm center can move through while the whole hand stays
+     * in view, per axis: [uMid, uHalf, vMid, vHalf]. It is the overlap of the calibrated movement
+     * range with the "safe" region (frame minus the hand's own reach on each side), mapped evenly
+     * onto the screen. One gain per axis means no speed change at the center, unlike separate
+     * left/right limits, which made one side several times more sensitive.
      */
-    private fun safeRange(cal: Calibration, w: Int, h: Int): FloatArray {
-        val minSide = minOf(w, h).toFloat()
-        val su = minSide / w; val sv = minSide / h
-        val extX = cal.baseSize * 1.25f * su
-        val extUp = cal.baseSize * 1.6f * sv     // fingers reach above the palm
-        val extDown = cal.baseSize * 0.9f * sv   // wrist below
+    fun playBox(cal: Calibration, w: Int, h: Int, sensitivity: Float): FloatArray {
+        val ext = cal.extents?.map { it * EXTENT_SLACK } ?: run {
+            // Older calibrations: estimate the reach from the hand's size.
+            val minSide = minOf(w, h).toFloat()
+            val su = minSide / w; val sv = minSide / h
+            // (Ratios from real recordings: a hand spans ~1.6× its size across, ~1.9× top to bottom.)
+            listOf(cal.baseSize * 0.8f * su, cal.baseSize * 0.8f * su, cal.baseSize * 1.1f * sv, cal.baseSize * 0.8f * sv)
+        }
         val m = EDGE_MARGIN
-        fun cap(r: Float, room: Float) = minOf(r * RANGE_SCALE, room).coerceAtLeast(MIN_RANGE)
-        return floatArrayOf(
-            cap(cal.rangeU, cal.centerU - extX - m),
-            cap(cal.rangeU, 1f - cal.centerU - extX - m),
-            cap(cal.rangeV, cal.centerV - extUp - m),
-            cap(cal.rangeV, 1f - cal.centerV - extDown - m),
-        )
+        fun axis(center: Float, range: Float, extLow: Float, extHigh: Float): Pair<Float, Float> {
+            val safeLo = extLow + m; val safeHi = 1f - extHigh - m
+            if (safeHi - safeLo < 2 * MIN_RANGE) {
+                // Hand too big/close for the frame: use what there is, centered.
+                return Pair((safeLo + safeHi) / 2, MIN_RANGE)
+            }
+            var lo = maxOf(center - range, safeLo)
+            var hi = minOf(center + range, safeHi)
+            if (hi - lo < 2 * MIN_RANGE) {
+                // Calibrated range sits mostly outside the safe region: shift it inside.
+                val mid = ((lo + hi) / 2).coerceIn(safeLo + MIN_RANGE, safeHi - MIN_RANGE)
+                lo = mid - MIN_RANGE; hi = mid + MIN_RANGE
+            }
+            // Lower sensitivity widens the box (more hand motion per screen width, so less shake),
+            // re-centered as needed but never past the safe region, or the hand would leave the
+            // camera's view before reaching the screen edge.
+            val half = minOf((hi - lo) / 2 / sensitivity.coerceAtLeast(0.1f), (safeHi - safeLo) / 2)
+                .coerceAtLeast((hi - lo) / 2)
+            val mid = ((lo + hi) / 2).coerceIn(safeLo + half, safeHi - half)
+            return Pair(mid, half)
+        }
+        val (um, uh) = axis(cal.centerU, cal.rangeU, ext[0], ext[1])
+        val (vm, vh) = axis(cal.centerV, cal.rangeV, ext[2], ext[3])
+        return floatArrayOf(um, uh, vm, vh)
     }
 
     /** Flags when any landmark gets close to the camera frame edge (tracking is lost past it). */
@@ -246,10 +268,17 @@ class HandRig {
         GripSolver.bendChain(local, GripSolver.INDEX_CHAIN, mid - dir * r, w)
     }
 
-    private companion object {
-        const val RANGE_SCALE = 1.0f
+    companion object {
+        /**
+         * Distance change (as a ratio) ignored before lifting starts. Players drift ~10–15% from
+         * their calibrated distance while playing; a smaller dead zone left the hand hovering
+         * above the table without them meaning to lift.
+         */
+        const val LIFT_DEAD_ZONE = 1.15f
         const val MIN_RANGE = 0.07f
-        const val EDGE_MARGIN = 0.03f
+        const val EDGE_MARGIN = 0.025f
+        /** Extra room on the measured open-hand reach (hands turn and spread while playing). */
+        const val EXTENT_SLACK = 1.1f
         /** Start warning when a landmark is this close (normalized) to the frame edge. */
         const val EDGE_WARN = 0.07f
 
