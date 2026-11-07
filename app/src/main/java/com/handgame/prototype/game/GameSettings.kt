@@ -1,0 +1,93 @@
+package com.handgame.prototype.game
+
+import android.content.Context
+import com.handgame.prototype.input.Calibration
+
+enum class HandednessSetting { AUTO, LEFT, RIGHT }
+
+/** Player and developer settings. Everything here is adjustable at runtime from the settings panel. */
+data class GameSettings(
+    val frontCamera: Boolean = true,
+    val handedness: HandednessSetting = HandednessSetting.AUTO,
+    /** >1 = smaller hand motion covers the whole table. */
+    val sensitivity: Float = 1.0f,
+    /** >1 = less change in hand distance needed to lift. */
+    val depthSensitivity: Float = 1.0f,
+    val vibration: Boolean = true,
+    // One Euro filter parameters (position in world units, depth in 0..1 lift units).
+    val posMinCutoff: Float = 1.2f,
+    val posBeta: Float = 6.0f,
+    val shapeMinCutoff: Float = 2.0f,
+    val shapeBeta: Float = 8.0f,
+    val depthMinCutoff: Float = 0.5f,
+    val depthBeta: Float = 1.0f,
+    val debugOverlay: Boolean = false,
+)
+
+/** Saves settings and calibration in SharedPreferences. */
+class SettingsStore(context: Context) {
+    private val prefs = context.getSharedPreferences("hand_game", Context.MODE_PRIVATE)
+
+    fun loadSettings(): GameSettings {
+        val d = GameSettings()
+        return GameSettings(
+            frontCamera = prefs.getBoolean("frontCamera", d.frontCamera),
+            handedness = runCatching {
+                HandednessSetting.valueOf(prefs.getString("handedness", d.handedness.name)!!)
+            }.getOrDefault(d.handedness),
+            sensitivity = prefs.getFloat("sensitivity", d.sensitivity),
+            depthSensitivity = prefs.getFloat("depthSensitivity", d.depthSensitivity),
+            vibration = prefs.getBoolean("vibration", d.vibration),
+            posMinCutoff = prefs.getFloat("posMinCutoff", d.posMinCutoff),
+            posBeta = prefs.getFloat("posBeta", d.posBeta),
+            shapeMinCutoff = prefs.getFloat("shapeMinCutoff", d.shapeMinCutoff),
+            shapeBeta = prefs.getFloat("shapeBeta", d.shapeBeta),
+            depthMinCutoff = prefs.getFloat("depthMinCutoff", d.depthMinCutoff),
+            depthBeta = prefs.getFloat("depthBeta", d.depthBeta),
+            debugOverlay = prefs.getBoolean("debugOverlay", d.debugOverlay),
+        )
+    }
+
+    fun saveSettings(s: GameSettings) {
+        prefs.edit()
+            .putBoolean("frontCamera", s.frontCamera)
+            .putString("handedness", s.handedness.name)
+            .putFloat("sensitivity", s.sensitivity)
+            .putFloat("depthSensitivity", s.depthSensitivity)
+            .putBoolean("vibration", s.vibration)
+            .putFloat("posMinCutoff", s.posMinCutoff)
+            .putFloat("posBeta", s.posBeta)
+            .putFloat("shapeMinCutoff", s.shapeMinCutoff)
+            .putFloat("shapeBeta", s.shapeBeta)
+            .putFloat("depthMinCutoff", s.depthMinCutoff)
+            .putFloat("depthBeta", s.depthBeta)
+            .putBoolean("debugOverlay", s.debugOverlay)
+            .apply()
+    }
+
+    /** Calibration is stored per camera, since the two setups differ. */
+    fun loadCalibration(frontCamera: Boolean): Calibration? {
+        val k = if (frontCamera) "cal_front_" else "cal_back_"
+        if (!prefs.contains(k + "baseSize")) return null
+        return Calibration(
+            baseSize = prefs.getFloat(k + "baseSize", 0.2f),
+            centerU = prefs.getFloat(k + "centerU", 0.5f),
+            centerV = prefs.getFloat(k + "centerV", 0.5f),
+            rangeU = prefs.getFloat(k + "rangeU", Calibration.DEFAULT_RANGE_U),
+            rangeV = prefs.getFloat(k + "rangeV", Calibration.DEFAULT_RANGE_V),
+            worldPalmLength = prefs.getFloat(k + "worldPalm", 0.085f),
+        )
+    }
+
+    fun saveCalibration(frontCamera: Boolean, c: Calibration) {
+        val k = if (frontCamera) "cal_front_" else "cal_back_"
+        prefs.edit()
+            .putFloat(k + "baseSize", c.baseSize)
+            .putFloat(k + "centerU", c.centerU)
+            .putFloat(k + "centerV", c.centerV)
+            .putFloat(k + "rangeU", c.rangeU)
+            .putFloat(k + "rangeV", c.rangeV)
+            .putFloat(k + "worldPalm", c.worldPalmLength)
+            .apply()
+    }
+}

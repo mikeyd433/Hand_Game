@@ -1,0 +1,467 @@
+package com.handgame.prototype.game
+
+import com.handgame.prototype.input.Calibration
+import com.handgame.prototype.input.CalibrationSession
+import com.handgame.prototype.input.Gesture
+import com.handgame.prototype.input.GestureDetector
+import com.handgame.prototype.math.Quat
+import com.handgame.prototype.math.Vec3
+import com.handgame.prototype.physics.PhysicsWorld
+import com.handgame.prototype.physics.RigidBox
+import com.handgame.prototype.tracking.HandMeasure
+import com.handgame.prototype.tracking.Handedness
+import com.handgame.prototype.tracking.HandednessVoter
+import com.handgame.prototype.tracking.TrackingSample
+import kotlin.math.abs
+
+enum class Phase { CALIBRATING, PLAYING, PAUSED, RESUMING }
+
+enum class HapticEvent { GRAB, RELEASE }
+
+/** Everything the debug overlay shows. */
+data class DebugInfo(
+    val gesture: Gesture,
+    val pinchDistance: Float,
+    val maxCurl: Float,
+    val lift: Float,
+    val sizeRatio: Float,
+    val renderFps: Float,
+    val trackingFps: Float,
+    val inferenceMs: Float,
+    val confidence: Float,
+    val handedness: Handedness,
+    val handPresent: Boolean,
+    val holding: Boolean,
+    val cubeSleeping: Boolean,
+    /** Raw (un-mirrored) normalized landmarks for drawing over the camera frame. */
+    val landmarks: FloatArray?,
+)
+
+/** Snapshot of game state for the Compose UI. */
+data class GameUi(
+    val phase: Phase = Phase.CALIBRATING,
+    val calibrationStep: CalibrationSession.Step = CalibrationSession.Step.HOLD,
+    val calibrationProgress: Float = 0f,
+    val countdown: Int = 0,
+    val handFoundFlash: Boolean = false,
+    val debug: DebugInfo? = null,
+)
+
+/**
+ * The prototype's game logic. Runs once per rendered frame on the main thread:
+ * tracking → smoothing → gestures → grab/throw → physics, plus calibration and auto-pause.
+ */
+class GameController(
+    initialSettings: GameSettings,
+    initialCalibration: Calibration?,
+    private val onHaptic: (HapticEvent) -> Unit = {},
+    private val onCalibrated: (Calibration) -> Unit = {},
+) {
+    var settings: GameSettings = initialSettings
+        private set
+
+    var calibration: Calibration = initialCalibration ?: DEFAULT_CALIBRATION
+        private set
+
+    var phase: Phase = if (initialCalibration == null) Phase.CALIBRATING else Phase.PAUSED
+        private set
+
+    private var calibrationSession: CalibrationSession? =
+        if (initialCalibration == null) CalibrationSession() else null
+
+    val rig = HandRig().also { it.applySettings(initialSettings) }
+    val gestures = GestureDetector()
+    private val handednessVoter = HandednessVoter()
+
+    val world = PhysicsWorld(PlaySpace.TABLE_HALF_X, PlaySpace.TABLE_HALF_Z)
+    val cube = RigidBox(Vec3(PlaySpace.CUBE_HALF, PlaySpace.CUBE_HALF, PlaySpace.CUBE_HALF), mass = 0.4f)
+
+    /** True while the hand should be drawn. */
+    var handVisible = false
+        private set
+    /** 0..1 grab-range glow on the cube. */
+    var highlight = 0f
+        private set
+    var holding = false
+        private set
+
+    var handedness = Handedness.UNKNOWN
+        private set
+
+    // Hand presence.
+    private var timeSec = 0.0
+    private var lastHandSeen = -10.0
+    private var lastSampleNs = 0L
+    private var lastSample: TrackingSample? = null
+
+    // Grab state.
+    private var grabGesture = Gesture.OPEN
+    private var lastNearTime = -10.0
+    private var heldLocalOffset = Vec3.ZERO
+    private var heldTargetOffset = Vec3.ZERO
+    private var heldRelRotation = Quat.IDENTITY
+    private val anchorHistory = ArrayDeque<Pair<Double, Vec3>>()
+
+    // Pause / resume.
+    private var resumeTimer = 0f
+    private var handFoundFlashTimer = 0f
+
+    // Cube respawn.
+    private var outOfPlayTimer = 0f
+
+    // Render-rate measurement.
+    private var fpsFrames = 0
+    private var fpsTime = 0f
+    private var renderFps = 0f
+
+    var trackingFpsProvider: () -> Float = { 0f }
+
+    init {
+        world.bodies.add(cube)
+        respawnCube()
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Public controls
+    // ------------------------------------------------------------------------------------------
+
+    fun updateSettings(s: GameSettings) {
+        val cameraChanged = s.frontCamera != settings.frontCamera
+        settings = s
+        rig.applySettings(s)
+        if (cameraChanged) {
+            // A different camera means a different hand pose and distance: recalibrate.
+            handednessVoter.reset()
+            recalibrate()
+        }
+    }
+
+    fun recalibrate() {
+        releaseHeld(throwIt = false)
+        calibrationSession = CalibrationSession()
+        phase = Phase.CALIBRATING
+        rig.reset()
+        gestures.reset()
+    }
+
+    fun skipRangeCalibration() {
+        val session = calibrationSession ?: return
+        if (session.skipMove()) finishCalibration(session)
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Frame update
+    // ------------------------------------------------------------------------------------------
+
+    fun update(dtRaw: Float, sample: TrackingSample?) {
+        val dt = dtRaw.coerceIn(0f, 0.1f)
+        timeSec += dt
+        measureFps(dt)
+
+        val fresh = sample != null && sample.timestampNs != lastSampleNs
+        if (fresh) {
+            lastSampleNs = sample!!.timestampNs
+            lastSample = sample
+            processSample(sample, dt)
+        }
+
+        val handPresent = timeSec - lastHandSeen < HAND_LOSS_GRACE
+        handVisible = handPresent && phase != Phase.PAUSED
+
+        updatePhase(dt, handPresent)
+        if (phase == Phase.PLAYING) updateGrab(fresh) else releaseHeld(throwIt = false)
+        updateHighlight(dt)
+
+        world.step(dt) { step ->
+            if (holding) {
+                val target = heldTarget()
+                world.drive(cube, target.first, target.second, step)
+            }
+        }
+        checkCubeBounds(dt)
+        if (handFoundFlashTimer > 0f) handFoundFlashTimer -= dt
+    }
+
+    private fun processSample(sample: TrackingSample, dt: Float) {
+        val hand = sample.hand ?: return
+        if (sample.frontCamera != settings.frontCamera) return // stale frame from the old camera
+        lastHandSeen = timeSec
+
+        val voted = handednessVoter.add(HandMeasure.physicalHandedness(hand.mpLabel))
+        handedness = when (settings.handedness) {
+            HandednessSetting.LEFT -> Handedness.LEFT
+            HandednessSetting.RIGHT -> Handedness.RIGHT
+            HandednessSetting.AUTO -> voted
+        }
+
+        val t = sample.timestampNs / 1e9
+        rig.update(
+            hand, sample.frontCamera, sample.imageWidth, sample.imageHeight,
+            calibration, settings, handedness != Handedness.LEFT, t,
+        )
+        gestures.update(rig.gestureShape)
+
+        anchorHistory.addLast(t to currentAnchor())
+        while (anchorHistory.size > 12) anchorHistory.removeFirst()
+
+        calibrationSession?.let { session ->
+            if (phase != Phase.CALIBRATING) return@let
+            val (u, v) = HandMeasure.palmCenterUv(hand, sample.frontCamera)
+            val size = HandMeasure.apparentSize(hand, sample.imageWidth, sample.imageHeight)
+            val done = session.update(
+                dt = sampleDt(),
+                handPresent = true,
+                gesture = gestures.state,
+                u = u, v = v, size = size,
+                worldPalm = HandMeasure.worldPalmLength(hand),
+            )
+            if (session.step == CalibrationSession.Step.MOVE && previousCalStep == CalibrationSession.Step.HOLD) {
+                // Use the fresh baseline right away so the hand moves correctly during the sweep.
+                provisionalFromHold(u, v, size, HandMeasure.worldPalmLength(hand))
+            }
+            previousCalStep = session.step
+            if (done) finishCalibration(session)
+        }
+    }
+
+    private var previousCalStep = CalibrationSession.Step.HOLD
+    private var lastCalSampleTime = -1.0
+
+    /** Time between tracking samples, for calibration timing. */
+    private fun sampleDt(): Float {
+        val dt = if (lastCalSampleTime < 0) 0f else (timeSec - lastCalSampleTime).toFloat()
+        lastCalSampleTime = timeSec
+        return dt.coerceIn(0f, 0.2f)
+    }
+
+    private fun provisionalFromHold(u: Float, v: Float, size: Float, palm: Float) {
+        calibration = calibration.copy(centerU = u, centerV = v, baseSize = size, worldPalmLength = palm)
+        rig.reset()
+    }
+
+    private fun finishCalibration(session: CalibrationSession) {
+        val result = session.result ?: return
+        calibration = result
+        calibrationSession = null
+        previousCalStep = CalibrationSession.Step.HOLD
+        lastCalSampleTime = -1.0
+        rig.reset()
+        onCalibrated(result)
+        phase = Phase.RESUMING
+        resumeTimer = RESUME_SECONDS
+        handFoundFlashTimer = 0f
+    }
+
+    private fun updatePhase(dt: Float, handPresent: Boolean) {
+        when (phase) {
+            Phase.CALIBRATING -> {
+                if (!handPresent) calibrationSession?.let {
+                    if (it.step == CalibrationSession.Step.HOLD) it.update(dt, false, Gesture.OPEN, 0f, 0f, 0f, 0f)
+                }
+            }
+            Phase.PLAYING -> if (!handPresent) {
+                // Auto-pause; any held object is set down gently.
+                releaseHeld(throwIt = false)
+                phase = Phase.PAUSED
+            }
+            Phase.PAUSED -> if (handPresent) {
+                phase = Phase.RESUMING
+                resumeTimer = RESUME_SECONDS
+                handFoundFlashTimer = 0.8f
+            }
+            Phase.RESUMING -> {
+                if (!handPresent) {
+                    phase = Phase.PAUSED
+                } else {
+                    resumeTimer -= dt
+                    if (resumeTimer <= 0f) {
+                        phase = Phase.PLAYING
+                        // Don't let a fist held during the countdown count as a fresh grab.
+                        grabGesture = gestures.state
+                    }
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Grabbing and throwing
+    // ------------------------------------------------------------------------------------------
+
+    private fun currentAnchor(): Vec3 =
+        if (holding && grabGesture == Gesture.FIST) rig.pose.fistPoint else rig.pose.pinchPoint
+
+    private fun reachDistance(): Float {
+        val p = rig.pose
+        return minOf(cube.distanceTo(p.pinchPoint), cube.distanceTo(p.fistPoint), cube.distanceTo(p.palmCenter) - 0.02f)
+    }
+
+    private fun updateGrab(fresh: Boolean) {
+        if (!handVisible) return
+        val g = gestures.state
+        val near = reachDistance() < GRAB_RANGE
+        if (near && g == Gesture.OPEN) lastNearTime = timeSec
+
+        if (!holding) {
+            val closedNow = g != Gesture.OPEN && grabGesture == Gesture.OPEN
+            // Closing the hand moves the fingertips, so accept a grab if the open hand was in range
+            // a moment ago, not just this exact frame.
+            if (closedNow && (near || timeSec - lastNearTime < 0.3)) startGrab(g)
+            grabGesture = g
+        } else {
+            if (g == Gesture.OPEN) {
+                releaseHeld(throwIt = true)
+                grabGesture = Gesture.OPEN
+            } else {
+                // A loosening fist can read as a pinch; keep holding either way.
+                // Soft snap: ease the held offset toward its settled position.
+                heldLocalOffset = Vec3.lerp(heldLocalOffset, heldTargetOffset, 0.18f)
+            }
+        }
+    }
+
+    private fun startGrab(g: Gesture) {
+        holding = true
+        grabGesture = g
+        cube.held = true
+        cube.wake()
+        val p = rig.pose
+        val anchor = if (g == Gesture.FIST) p.fistPoint else p.pinchPoint
+        val inv = p.rotation.conjugate()
+        heldLocalOffset = inv.rotate(cube.position - anchor)
+        // Settle the cube so its surface sits at the grab point (pinch) or snug under the palm (fist).
+        val maxLen = if (g == Gesture.FIST) PlaySpace.CUBE_HALF * 0.6f else PlaySpace.CUBE_HALF * 1.05f
+        heldTargetOffset = heldLocalOffset.clampLength(maxLen)
+        heldRelRotation = (inv * cube.orientation).normalized()
+        onHaptic(HapticEvent.GRAB)
+    }
+
+    private fun heldTarget(): Pair<Vec3, Quat> {
+        val p = rig.pose
+        val anchor = if (grabGesture == Gesture.FIST) p.fistPoint else p.pinchPoint
+        var pos = anchor + p.rotation.rotate(heldLocalOffset)
+        if (pos.y < PlaySpace.CUBE_HALF * 0.9f) pos = Vec3(pos.x, PlaySpace.CUBE_HALF * 0.9f, pos.z)
+        return pos to (p.rotation * heldRelRotation).normalized()
+    }
+
+    private fun releaseHeld(throwIt: Boolean) {
+        if (!holding) return
+        holding = false
+        cube.held = false
+        cube.wake()
+        if (throwIt) {
+            val v = recentHandVelocity()
+            cube.linearVelocity = if (v.length() > THROW_MIN_SPEED) (v * THROW_GAIN).clampLength(THROW_MAX_SPEED)
+            else cube.linearVelocity * 0.3f
+            cube.angularVelocity = cube.angularVelocity * 0.5f
+        } else {
+            cube.linearVelocity = Vec3.ZERO
+            cube.angularVelocity = Vec3.ZERO
+        }
+        onHaptic(HapticEvent.RELEASE)
+    }
+
+    /** Average hand velocity over roughly the last 100 ms of tracking samples. */
+    private fun recentHandVelocity(): Vec3 {
+        if (anchorHistory.size < 2) return Vec3.ZERO
+        val (tEnd, pEnd) = anchorHistory.last()
+        var start = anchorHistory.first()
+        for (i in anchorHistory.indices.reversed()) {
+            if (tEnd - anchorHistory[i].first >= 0.1) { start = anchorHistory[i]; break }
+        }
+        val dt = (tEnd - start.first).toFloat()
+        if (dt < 1e-3f) return Vec3.ZERO
+        return (pEnd - start.second) / dt
+    }
+
+    private fun updateHighlight(dt: Float) {
+        val target = when {
+            holding -> 0.6f
+            phase == Phase.PLAYING && handVisible && reachDistance() < GRAB_RANGE -> 1f
+            else -> 0f
+        }
+        val rate = 10f * dt
+        highlight += (target - highlight) * rate.coerceAtMost(1f)
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Housekeeping
+    // ------------------------------------------------------------------------------------------
+
+    private fun checkCubeBounds(dt: Float) {
+        val pos = cube.position
+        val offTable = pos.y < -0.2f || abs(pos.x) > 3f || abs(pos.z) > 3f
+        outOfPlayTimer = if (offTable && !holding) outOfPlayTimer + dt else 0f
+        if (outOfPlayTimer > 1.2f || pos.y < -5f) respawnCube()
+    }
+
+    fun respawnCube() {
+        releaseHeld(throwIt = false)
+        cube.position = Vec3(0f, 0.35f, 0f)
+        cube.orientation = Quat.fromAxisAngle(Vec3(0.3f, 1f, 0.2f), 0.5f)
+        cube.linearVelocity = Vec3.ZERO
+        cube.angularVelocity = Vec3.ZERO
+        cube.wake()
+        outOfPlayTimer = 0f
+    }
+
+    private fun measureFps(dt: Float) {
+        fpsFrames++
+        fpsTime += dt
+        if (fpsTime >= 0.5f) {
+            renderFps = fpsFrames / fpsTime
+            fpsFrames = 0
+            fpsTime = 0f
+        }
+    }
+
+    fun uiSnapshot(withDebug: Boolean): GameUi {
+        val session = calibrationSession
+        val debug = if (withDebug) {
+            val s = lastSample
+            DebugInfo(
+                gesture = gestures.state,
+                pinchDistance = gestures.metrics.pinchDistance,
+                maxCurl = gestures.metrics.maxCurl,
+                lift = rig.pose.lift,
+                sizeRatio = rig.pose.sizeRatio,
+                renderFps = renderFps,
+                trackingFps = trackingFpsProvider(),
+                inferenceMs = s?.inferenceMs ?: 0f,
+                confidence = s?.hand?.confidence ?: 0f,
+                handedness = handedness,
+                handPresent = handVisible,
+                holding = holding,
+                cubeSleeping = cube.sleeping,
+                landmarks = s?.hand?.image,
+            )
+        } else null
+        return GameUi(
+            phase = phase,
+            calibrationStep = session?.step ?: CalibrationSession.Step.DONE,
+            calibrationProgress = session?.progress ?: 1f,
+            countdown = if (phase == Phase.RESUMING) kotlin.math.ceil(resumeTimer / (RESUME_SECONDS / 3f)).toInt().coerceIn(1, 3) else 0,
+            handFoundFlash = handFoundFlashTimer > 0f,
+            debug = debug,
+        )
+    }
+
+    companion object {
+        /** How long the hand may vanish before the game pauses. */
+        const val HAND_LOSS_GRACE = 0.4
+        const val RESUME_SECONDS = 1.2f
+        const val GRAB_RANGE = 0.06f
+        const val THROW_GAIN = 1.15f
+        const val THROW_MIN_SPEED = 0.35f
+        const val THROW_MAX_SPEED = 6f
+
+        val DEFAULT_CALIBRATION = Calibration(
+            baseSize = 0.22f,
+            centerU = 0.5f,
+            centerV = 0.5f,
+            rangeU = Calibration.DEFAULT_RANGE_U,
+            rangeV = Calibration.DEFAULT_RANGE_V,
+            worldPalmLength = 0.085f,
+        )
+    }
+}
