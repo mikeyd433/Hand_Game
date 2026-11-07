@@ -42,6 +42,11 @@ class HandPose {
     var lift = 0f
     /** Smoothed apparent-size ratio vs. calibration (1 = calibrated distance). */
     var sizeRatio = 1f
+    /** 0..1: how close the real hand is to leaving the camera's view. */
+    var edgeWarning = 0f
+    /** Which screen edge the hand is nearing: x −1 left / +1 right, y −1 top / +1 bottom. */
+    var edgeX = 0
+    var edgeY = 0
 }
 
 /**
@@ -56,26 +61,32 @@ class HandPose {
 class HandRig {
     val pose = HandPose()
 
-    private val positionFilter = OneEuroBank(3, 1.2f, 6f, 1f)
-    private val shapeFilter = OneEuroBank(Lm.COUNT * 3, 2f, 8f, 1f)
+    private val positionFilter = OneEuroBank(3, 0.8f, 2f, 1f)
+    private val angleFilter = OneEuroBank(HandSkeleton.SIZE, 1.5f, 0.6f, 1f)
+    private val palmFilter = OneEuroBank(6, 1.2f, 0.5f, 1f)
     private val depthFilter = OneEuroFilter(0.5f, 1f, 1f)
 
     private val rawShape = Array(Lm.COUNT) { Vec3.ZERO }
-    private val shapeBuf = FloatArray(Lm.COUNT * 3)
+    private val angles = FloatArray(HandSkeleton.SIZE)
+    private val palmBuf = FloatArray(6)
+    private val skeleton = Array(Lm.COUNT) { Vec3.ZERO }
+    private var lastRightHand: Boolean? = null
 
     /** The latest unsmoothed shape (scaled to world size), used for gesture detection. */
     val gestureShape = Array(Lm.COUNT) { Vec3.ZERO }
 
     fun applySettings(s: GameSettings) {
         positionFilter.setParams(s.posMinCutoff, s.posBeta, 1f)
-        shapeFilter.setParams(s.shapeMinCutoff, s.shapeBeta, 1f)
+        angleFilter.setParams(s.shapeMinCutoff, s.shapeBeta, 1f)
+        palmFilter.setParams(s.shapeMinCutoff * 0.5f, s.shapeBeta, 1f)
         depthFilter.minCutoff = s.depthMinCutoff
         depthFilter.beta = s.depthBeta
     }
 
     fun reset() {
         positionFilter.reset()
-        shapeFilter.reset()
+        angleFilter.reset()
+        palmFilter.reset()
         depthFilter.reset()
     }
 
@@ -93,12 +104,29 @@ class HandRig {
         // --- Shape -------------------------------------------------------------------------
         HandMeasure.gameShape(hand, frontCamera, rawShape)
         val scale = HandLook.palmLength / cal.worldPalmLength.coerceIn(0.04f, 0.2f)
-        for (i in 0 until Lm.COUNT) {
-            val p = rawShape[i] * scale
-            gestureShape[i] = p
-            shapeBuf[i * 3] = p.x; shapeBuf[i * 3 + 1] = p.y; shapeBuf[i * 3 + 2] = p.z
-        }
-        shapeFilter.filterInPlace(shapeBuf, t)
+        for (i in 0 until Lm.COUNT) gestureShape[i] = rawShape[i] * scale
+
+        // The skeleton's conventions flip with handedness, so start its filters fresh on a flip.
+        if (lastRightHand != rightHand) { angleFilter.reset(); palmFilter.reset(); lastRightHand = rightHand }
+
+        // Palm orientation: smooth the forward and up directions, then rebuild a clean frame.
+        val trackedRot = palmRotation(gestureShape, rightHand)
+        val fwdRaw = trackedRot.rotate(Vec3(0f, 0f, -1f)); val upRaw = trackedRot.rotate(Vec3.UP)
+        palmBuf[0] = fwdRaw.x; palmBuf[1] = fwdRaw.y; palmBuf[2] = fwdRaw.z
+        palmBuf[3] = upRaw.x; palmBuf[4] = upRaw.y; palmBuf[5] = upRaw.z
+        palmFilter.filterInPlace(palmBuf, t)
+        val fwd = Vec3(palmBuf[0], palmBuf[1], palmBuf[2]).normalized()
+        var up = Vec3(palmBuf[3], palmBuf[4], palmBuf[5])
+        up = (up - fwd * (up dot fwd)).normalized()
+        val palmRot = if (fwd.lengthSq() < 0.5f || up.lengthSq() < 0.5f) trackedRot
+        else Quat.fromBasis((fwd cross up).normalized(), up, -fwd)
+
+        // Finger pose: read joint angles (clamped to real hand limits), smooth them, and pose a
+        // rigid skeleton with fixed bone lengths, so the hand never stretches or folds through itself.
+        HandSkeleton.extract(gestureShape, trackedRot, rightHand, angles)
+        angleFilter.filterInPlace(angles, t)
+        HandSkeleton.pose(angles, rightHand, HandLook.palmLength, skeleton)
+        assistPinch(skeleton)
 
         // --- Depth → lift ------------------------------------------------------------------
         val size = HandMeasure.apparentSize(hand, imageWidth, imageHeight)
@@ -120,51 +148,108 @@ class HandRig {
         // --- Position ----------------------------------------------------------------------
         val (u, v) = HandMeasure.palmCenterUv(hand, frontCamera)
         val sens = settings.sensitivity.coerceAtLeast(0.1f)
-        val nx = ((u - cal.centerU) / cal.rangeU * sens).coerceIn(-1f, 1f)
-        val ny = ((v - cal.centerV) / cal.rangeV * sens).coerceIn(-1f, 1f)
+        val range = safeRange(cal, imageWidth, imageHeight)
+        val du = u - cal.centerU; val dv = v - cal.centerV
+        val nx = (du / (if (du < 0f) range[0] else range[1]) * sens).coerceIn(-1f, 1f)
+        val ny = (dv / (if (dv < 0f) range[2] else range[3]) * sens).coerceIn(-1f, 1f)
+        updateEdgeWarning(hand, frontCamera)
         // The comfortable range covers the whole screen: map it to screen coordinates, then find
         // the matching spot at hover height. Lifting then goes straight up from there.
         val ndcX = nx * SCREEN_REACH_X
         val ndcY = if (ny < 0f) -ny * SCREEN_REACH_TOP else -ny * SCREEN_REACH_BOTTOM
         val ground = view.screenToPlane(ndcX, ndcY, PlaySpace.HOVER_HEIGHT)
             ?: Vec3(nx * PlaySpace.TABLE_HALF_X, PlaySpace.HOVER_HEIGHT, ny * PlaySpace.TABLE_HALF_Z)
-        val target = floatArrayOf(
-            ground.x,
-            PlaySpace.HOVER_HEIGHT + lift * PlaySpace.MAX_LIFT,
-            ground.z,
-        )
+        // Keep the hand from sinking into the table: raise the palm enough for its lowest joint.
+        // Done before smoothing so finger motion doesn't make the whole hand bob.
+        var lowest = 0f
+        for (i in 0 until Lm.COUNT) lowest = minOf(lowest, palmRot.rotate(skeleton[i]).y)
+        val overTable = kotlin.math.abs(ground.x) < PlaySpace.TABLE_HALF_X + 0.05f &&
+            kotlin.math.abs(ground.z) < PlaySpace.TABLE_HALF_Z + 0.05f
+        val floorY = PlaySpace.FINGER_RADIUS * HandLook.scale * 0.8f
+        var height = PlaySpace.HOVER_HEIGHT + lift * PlaySpace.MAX_LIFT
+        if (overTable) height = maxOf(height, floorY - lowest)
+        val target = floatArrayOf(ground.x, height, ground.z)
         positionFilter.filterInPlace(target, t)
-        var center = Vec3(target[0], target[1], target[2])
+        val center = Vec3(target[0], target[1], target[2])
 
         // --- Assemble joints ---------------------------------------------------------------
         val joints = pose.joints
-        var minY = Float.MAX_VALUE
-        for (i in 0 until Lm.COUNT) {
-            val local = Vec3(shapeBuf[i * 3], shapeBuf[i * 3 + 1], shapeBuf[i * 3 + 2])
-            joints[i] = center + local
-            if (joints[i].y < minY) minY = joints[i].y
-        }
-        // Keep the hand from sinking into the table top.
-        val overTable = kotlin.math.abs(center.x) < PlaySpace.TABLE_HALF_X + 0.05f &&
-            kotlin.math.abs(center.z) < PlaySpace.TABLE_HALF_Z + 0.05f
-        val floorY = PlaySpace.FINGER_RADIUS * HandLook.scale * 0.8f
-        if (overTable && minY < floorY) {
-            val push = Vec3(0f, floorY - minY, 0f)
-            center += push
-            for (i in 0 until Lm.COUNT) joints[i] = joints[i] + push
-        }
+        for (i in 0 until Lm.COUNT) joints[i] = center + palmRot.rotate(skeleton[i])
 
         pose.palmCenter = center
         pose.lift = lift
         pose.sizeRatio = ratio
-        pose.rotation = palmRotation(joints, rightHand)
+        pose.rotation = palmRot
         pose.pinchPoint = (joints[Lm.THUMB_TIP] + joints[Lm.INDEX_TIP]) * 0.5f
         val palmDown = pose.rotation.rotate(Vec3(0f, -1f, 0f))
         val toFingers = (joints[Lm.MIDDLE_MCP] - center) * 0.5f
         pose.fistPoint = center + toFingers + palmDown * (0.05f * HandLook.scale)
     }
 
+    /**
+     * Movement half-ranges [left, right, up, down] in normalized image units. Starts from the
+     * calibrated range (shrunk a little so the screen edges need less reach), then is capped so
+     * that reaching any screen edge never needs the hand to leave the camera's view. The hand's
+     * extent comes from the calibrated size, so the cap is stable frame to frame.
+     */
+    private fun safeRange(cal: Calibration, w: Int, h: Int): FloatArray {
+        val minSide = minOf(w, h).toFloat()
+        val su = minSide / w; val sv = minSide / h
+        val extX = cal.baseSize * 1.25f * su
+        val extUp = cal.baseSize * 1.6f * sv     // fingers reach above the palm
+        val extDown = cal.baseSize * 0.9f * sv   // wrist below
+        val m = EDGE_MARGIN
+        fun cap(r: Float, room: Float) = minOf(r * RANGE_SCALE, room).coerceAtLeast(MIN_RANGE)
+        return floatArrayOf(
+            cap(cal.rangeU, cal.centerU - extX - m),
+            cap(cal.rangeU, 1f - cal.centerU - extX - m),
+            cap(cal.rangeV, cal.centerV - extUp - m),
+            cap(cal.rangeV, 1f - cal.centerV - extDown - m),
+        )
+    }
+
+    /** Flags when any landmark gets close to the camera frame edge (tracking is lost past it). */
+    private fun updateEdgeWarning(hand: RawHand, frontCamera: Boolean) {
+        var minLeft = 1f; var minRight = 1f; var minTop = 1f; var minBottom = 1f
+        for (i in 0 until Lm.COUNT) {
+            val u = hand.image[i * 2]; val v = hand.image[i * 2 + 1]
+            minLeft = minOf(minLeft, u); minRight = minOf(minRight, 1f - u)
+            minTop = minOf(minTop, v); minBottom = minOf(minBottom, 1f - v)
+        }
+        // Screen left/right: the front camera image is mirrored on screen.
+        val screenLeft = if (frontCamera) minRight else minLeft
+        val screenRight = if (frontCamera) minLeft else minRight
+        val margins = floatArrayOf(screenLeft, screenRight, minTop, minBottom)
+        val worst = margins.indices.minByOrNull { margins[it] }!!
+        pose.edgeWarning = ((EDGE_WARN - margins[worst]) / EDGE_WARN).coerceIn(0f, 1f)
+        pose.edgeX = when (worst) { 0 -> -1; 1 -> 1; else -> 0 }
+        pose.edgeY = when (worst) { 2 -> -1; 3 -> 1; else -> 0 }
+    }
+
+    /**
+     * The skeleton has cartoon proportions, so a real pinch doesn't always bring its thumb and
+     * index tips together. As the real fingers close, draw the tips together so pinches read.
+     */
+    private fun assistPinch(local: Array<Vec3>) {
+        val palm = gestureShape[Lm.WRIST].distance(gestureShape[Lm.MIDDLE_MCP]).coerceAtLeast(1e-4f)
+        val d = gestureShape[Lm.THUMB_TIP].distance(gestureShape[Lm.INDEX_TIP]) / palm
+        val w = ((0.55f - d) / 0.3f).coerceIn(0f, 1f)
+        if (w <= 0f) return
+        val thumb = local[Lm.THUMB_TIP]; val index = local[Lm.INDEX_TIP]
+        val mid = (thumb + index) * 0.5f
+        val dir = (thumb - index).normalized().let { if (it.lengthSq() < 0.5f) Vec3(1f, 0f, 0f) else it }
+        val r = (HandLook.jointRadius(Lm.THUMB_TIP) + HandLook.jointRadius(Lm.INDEX_TIP)) * 0.5f
+        GripSolver.bendChain(local, GripSolver.THUMB_CHAIN, mid + dir * r, w)
+        GripSolver.bendChain(local, GripSolver.INDEX_CHAIN, mid - dir * r, w)
+    }
+
     private companion object {
+        const val RANGE_SCALE = 1.0f
+        const val MIN_RANGE = 0.07f
+        const val EDGE_MARGIN = 0.03f
+        /** Start warning when a landmark is this close (normalized) to the frame edge. */
+        const val EDGE_WARN = 0.07f
+
         // How far the palm center reaches toward each screen edge (NDC). Slightly inside the edge
         // so the whole hand stays visible; the top leaves room for the fingers.
         const val SCREEN_REACH_X = 0.92f

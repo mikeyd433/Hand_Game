@@ -12,7 +12,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -75,6 +78,8 @@ fun GameScreen(
                 factory = { ctx -> SurfaceView(ctx).also(createSurface) },
             )
 
+            EdgeGlow(ui.edgeWarning, ui.edgeX, ui.edgeY)
+
             Box(Modifier.fillMaxSize().systemBarsPadding()) {
                 // Top bar.
                 Row(
@@ -122,6 +127,36 @@ fun GameScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+/** Soft glow on the screen edge the hand is about to leave the camera's view through. */
+@Composable
+private fun EdgeGlow(strength: Float, edgeX: Int, edgeY: Int) {
+    if (strength <= 0.01f) return
+    val glow = Color(0xFFFFC46B).copy(alpha = 0.75f * strength)
+    val clear = Color.Transparent
+    Box(Modifier.fillMaxSize()) {
+        val thickness = 90.dp
+        when {
+            edgeX < 0 -> Box(Modifier.align(Alignment.CenterStart).fillMaxHeight().width(thickness)
+                .background(Brush.horizontalGradient(listOf(glow, clear))))
+            edgeX > 0 -> Box(Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(thickness)
+                .background(Brush.horizontalGradient(listOf(clear, glow))))
+            edgeY < 0 -> Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(thickness)
+                .background(Brush.verticalGradient(listOf(glow, clear))))
+            edgeY > 0 -> Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(thickness)
+                .background(Brush.verticalGradient(listOf(clear, glow))))
+        }
+        if (strength > 0.6f) {
+            Text(
+                "Edge of the camera's view",
+                color = Ink,
+                fontSize = 13.sp,
+                modifier = Modifier.align(Alignment.Center).padding(top = 260.dp)
+                    .background(Panel, RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 6.dp),
+            )
         }
     }
 }

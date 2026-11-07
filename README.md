@@ -39,7 +39,9 @@ The hand model (`hand_landmarker.task`, about 7.8 MB) is downloaded by Gradle in
 
    Then sweep your hand around the area you want to use, or tap **Skip**.
 2. **Move** your hand to move the on-screen hand. Your comfortable range (from calibration) covers
-   the whole screen. The cube glows when it is in reach.
+   the whole screen. It is capped so you can reach every screen edge without your hand leaving the
+   camera's view, and a soft glow appears on the screen edge if it starts to. The cube glows when it
+   is in reach.
 3. **Grab** with a **pinch** (thumb and index finger together) or a **fist**.
 4. **Lift** by pulling your hand back. The screen is a window looking down at the table, so pushing
    "into" it goes down:
@@ -69,6 +71,7 @@ app/src/main/java/com/handgame/prototype/
 │   └── Calibration.kt     open-hand baseline + movement-range sweep
 ├── game/
 │   ├── HandRig.kt         landmarks → smoothed world pose (X/Z from position, Y from apparent size)
+│   ├── HandSkeleton.kt    rigid hand: angles from landmarks → fixed-length skeleton
 │   ├── ViewRig.kt         scene camera framing + screen→world projection (shared with renderer)
 │   ├── GameController.kt  phases (calibrate/play/pause/resume), grab, soft snap, throw, highlight
 │   └── GameSettings.kt    settings + calibration persistence
@@ -86,6 +89,11 @@ app/src/main/java/com/handgame/prototype/
 - **Mirroring:** frames go to MediaPipe upright and un-mirrored. For the front camera, the screen
   position is mirrored (`u → 1-u`) so moving right moves the hand right. The 3D shape is rotated
   with a *proper* rotation for each camera, so a left hand is never turned into a right hand.
+- **Solid hand:** the drawn hand is a rigid skeleton with fixed cartoon bone lengths
+  (`HandSkeleton.kt`). From tracking we read only joint angles (finger curl, a little spread, thumb
+  direction and bend), clamp them to real hand limits and smooth them. Noisy landmark depth can't
+  stretch or fold the fingers. Gestures still use the raw landmarks so they stay responsive.
+  Smoothing runs every rendered frame, so the hand glides between ~30 fps tracking updates.
 - **Handedness:** MediaPipe labels assume a mirrored selfie image, so the label is inverted for our
   images and then majority-voted over about 20 frames. You can override it in settings.
 - **Screen-wide reach:** the calibrated movement range maps to screen coordinates (nearly

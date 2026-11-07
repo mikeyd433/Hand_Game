@@ -117,11 +117,11 @@ fun SettingsPanel(
                 LabeledSlider("Position min cutoff (Hz)", settings.posMinCutoff, 0.1f..5f) {
                     onChange(settings.copy(posMinCutoff = it))
                 }
-                LabeledSlider("Position beta", settings.posBeta, 0f..30f) { onChange(settings.copy(posBeta = it)) }
-                LabeledSlider("Finger min cutoff (Hz)", settings.shapeMinCutoff, 0.1f..8f) {
+                LabeledSlider("Position beta", settings.posBeta, 0f..15f) { onChange(settings.copy(posBeta = it)) }
+                LabeledSlider("Finger min cutoff (Hz)", settings.shapeMinCutoff, 0.1f..6f) {
                     onChange(settings.copy(shapeMinCutoff = it))
                 }
-                LabeledSlider("Finger beta", settings.shapeBeta, 0f..40f) { onChange(settings.copy(shapeBeta = it)) }
+                LabeledSlider("Finger beta", settings.shapeBeta, 0f..5f) { onChange(settings.copy(shapeBeta = it)) }
                 LabeledSlider("Depth min cutoff (Hz)", settings.depthMinCutoff, 0.05f..3f) {
                     onChange(settings.copy(depthMinCutoff = it))
                 }

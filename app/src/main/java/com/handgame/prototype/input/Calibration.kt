@@ -20,8 +20,8 @@ data class Calibration(
     val worldPalmLength: Float,
 ) {
     companion object {
-        const val DEFAULT_RANGE_U = 0.26f
-        const val DEFAULT_RANGE_V = 0.22f
+        const val DEFAULT_RANGE_U = 0.24f
+        const val DEFAULT_RANGE_V = 0.20f
         const val MIN_RANGE = 0.10f
     }
 }

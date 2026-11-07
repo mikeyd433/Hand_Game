@@ -45,6 +45,10 @@ data class GameUi(
     val calibrationProgress: Float = 0f,
     val countdown: Int = 0,
     val handFoundFlash: Boolean = false,
+    /** 0..1 strength of the "hand is near the edge of the camera's view" glow, and its edge. */
+    val edgeWarning: Float = 0f,
+    val edgeX: Int = 0,
+    val edgeY: Int = 0,
     val debug: DebugInfo? = null,
 )
 
@@ -176,6 +180,10 @@ class GameController(
             lastSampleNs = sample!!.timestampNs
             lastSample = sample
             processSample(sample, dt)
+        } else if (timeSec - lastHandSeen < HAND_LOSS_GRACE) {
+            // Tracking runs at ~30 fps and rendering at 60: keep the smoothing running every frame
+            // on the latest sample so the hand glides between tracking updates instead of stepping.
+            lastSample?.let { if (it.hand != null && it.frontCamera == settings.frontCamera) updateRig(it) }
         }
 
         val handPresent = timeSec - lastHandSeen < HAND_LOSS_GRACE
@@ -208,11 +216,8 @@ class GameController(
             HandednessSetting.AUTO -> voted
         }
 
-        val t = sample.timestampNs / 1e9
-        rig.update(
-            hand, sample.frontCamera, sample.imageWidth, sample.imageHeight,
-            calibration, settings, handedness != Handedness.LEFT, view, t,
-        )
+        val t = timeSec
+        updateRig(sample)
         gestures.update(rig.gestureShape)
 
         anchorHistory.addLast(t to currentAnchor())
@@ -236,6 +241,13 @@ class GameController(
             previousCalStep = session.step
             if (done) finishCalibration(session)
         }
+    }
+
+    private fun updateRig(sample: TrackingSample) {
+        rig.update(
+            sample.hand!!, sample.frontCamera, sample.imageWidth, sample.imageHeight,
+            calibration, settings, handedness != Handedness.LEFT, view, timeSec,
+        )
     }
 
     private var previousCalStep = CalibrationSession.Step.HOLD
@@ -503,6 +515,9 @@ class GameController(
             calibrationProgress = session?.progress ?: 1f,
             countdown = if (phase == Phase.RESUMING) kotlin.math.ceil(resumeTimer / (RESUME_SECONDS / 3f)).toInt().coerceIn(1, 3) else 0,
             handFoundFlash = handFoundFlashTimer > 0f,
+            edgeWarning = if (handVisible && phase != Phase.CALIBRATING) rig.pose.edgeWarning else 0f,
+            edgeX = rig.pose.edgeX,
+            edgeY = rig.pose.edgeY,
             debug = debug,
         )
     }

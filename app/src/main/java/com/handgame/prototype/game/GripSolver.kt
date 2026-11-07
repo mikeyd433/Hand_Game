@@ -53,8 +53,8 @@ object HandLook {
 object GripSolver {
 
     /** How far each joint follows its fingertip's correction (tip = 1). */
-    private val THUMB_CHAIN = intArrayOf(Lm.THUMB_TIP, Lm.THUMB_IP, Lm.THUMB_MCP, Lm.THUMB_CMC)
-    private val INDEX_CHAIN = intArrayOf(Lm.INDEX_TIP, Lm.INDEX_DIP, Lm.INDEX_PIP, Lm.INDEX_MCP)
+    val THUMB_CHAIN = intArrayOf(Lm.THUMB_TIP, Lm.THUMB_IP, Lm.THUMB_MCP, Lm.THUMB_CMC)
+    val INDEX_CHAIN = intArrayOf(Lm.INDEX_TIP, Lm.INDEX_DIP, Lm.INDEX_PIP, Lm.INDEX_MCP)
     private val CHAIN_WEIGHTS = floatArrayOf(1f, 0.7f, 0.35f, 0.1f)
     private val CURLED = intArrayOf(
         Lm.INDEX_PIP, Lm.INDEX_DIP, Lm.INDEX_TIP,
@@ -107,7 +107,7 @@ object GripSolver {
         }
     }
 
-    private fun bendChain(joints: Array<Vec3>, chain: IntArray, tipTarget: Vec3, weight: Float) {
+    fun bendChain(joints: Array<Vec3>, chain: IntArray, tipTarget: Vec3, weight: Float) {
         val delta = (tipTarget - joints[chain[0]]) * weight
         for (k in chain.indices) joints[chain[k]] = joints[chain[k]] + delta * CHAIN_WEIGHTS[k]
     }
